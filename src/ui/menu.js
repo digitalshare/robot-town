@@ -4,11 +4,25 @@ import { MAX_EXPANSIONS } from '../data/layout.js';
 import { createChatSession } from '../ai/chat.js';
 import { createAiConsoleTab } from './aiConsoleTab.js';
 import { createSettingsTab } from './settingsTab.js';
+import { createFunctionsPanel } from './functionsPanel.js';
 import { createGalleryTab } from './galleryTab.js';
+import { createObjectsTab } from './objectsTab.js';
+import { createRobotsTab } from './robotsTab.js';
 
-export function createMenu({ store, townStore, manager, onLocate, onPickSite, host = document.body } = {}) {
-  const session = createChatSession(store);
+export function createMenu({
+  store,
+  townStore,
+  manager,
+  interiorView,
+  onLocate,
+  onPickSite,
+  onObjectSelect,
+  onRobotManage,
+  host = document.body,
+} = {}) {
+  const session = createChatSession(store, { townStore });
   let settingsTab = null;
+  let functionsPanel = null;
 
   const aiTab = createAiConsoleTab({
     store,
@@ -18,8 +32,23 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
       settingsTab?.startAdd();
     },
   });
-  settingsTab = createSettingsTab({ store });
+  settingsTab = createSettingsTab({
+    store,
+    onOpenFunctions: () => functionsPanel?.open(functionsPanel.current()),
+  });
   const galleryTab = createGalleryTab({ townStore, onLocate });
+  const objectsTab = createObjectsTab({
+    townStore,
+    interiorView,
+    onDesign: (record) => openObjectTool(record),
+    onSelect: (id) => onObjectSelect?.(id),
+  });
+  const robotsTab = createRobotsTab({
+    townStore,
+    interiorView,
+    onManage: (id) => onRobotManage?.(id),
+  });
+  functionsPanel = createFunctionsPanel({ store, host });
 
   const tabAiBtn = el('button', {
     id: 'tab-btn-ai',
@@ -28,7 +57,7 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
     'aria-selected': 'true',
     'aria-controls': 'tab-ai',
     dataset: { tab: 'ai' },
-    text: 'AI CONSOLE',
+    text: 'AI',
   });
   const tabGalleryBtn = el('button', {
     id: 'tab-btn-gallery',
@@ -37,7 +66,25 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
     'aria-selected': 'false',
     'aria-controls': 'tab-gallery',
     dataset: { tab: 'gallery' },
-    text: 'GALLERY',
+    text: 'BUILDINGS',
+  });
+  const tabObjectsBtn = el('button', {
+    id: 'tab-btn-objects',
+    className: 'menu-tab',
+    role: 'tab',
+    'aria-selected': 'false',
+    'aria-controls': 'tab-objects',
+    dataset: { tab: 'objects' },
+    text: 'OBJECTS',
+  });
+  const tabRobotsBtn = el('button', {
+    id: 'tab-btn-robots',
+    className: 'menu-tab',
+    role: 'tab',
+    'aria-selected': 'false',
+    'aria-controls': 'tab-robots',
+    dataset: { tab: 'robots' },
+    text: 'ROBOTS',
   });
   const tabSettingsBtn = el('button', {
     id: 'tab-btn-settings',
@@ -62,8 +109,8 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
       el('button', { id: 'menu-close', className: 'menu-icon-btn', 'aria-label': 'Close menu', text: '×' })
     ),
     el('div', { className: 'menu-actions' }, expandBtn, siteBtn),
-    el('nav', { className: 'menu-tabs', role: 'tablist' }, tabAiBtn, tabGalleryBtn, tabSettingsBtn),
-    el('div', { className: 'menu-panel__body' }, aiTab.el, galleryTab.el, settingsTab.el)
+    el('nav', { className: 'menu-tabs', role: 'tablist' }, tabAiBtn, tabGalleryBtn, tabObjectsBtn, tabRobotsBtn, tabSettingsBtn),
+    el('div', { className: 'menu-panel__body' }, aiTab.el, galleryTab.el, objectsTab.el, robotsTab.el, settingsTab.el)
   );
 
   const button = el('button', {
@@ -77,12 +124,14 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
   const openCbs = new Set();
   const closeCbs = new Set();
   const storedTab = store.getState().ui.tab;
-  let currentTab = storedTab === 'settings' || storedTab === 'gallery' ? storedTab : 'ai';
+  let currentTab = ['settings', 'gallery', 'objects', 'robots'].includes(storedTab) ? storedTab : 'ai';
 
   function tabs() {
     return {
       ai: { btn: tabAiBtn, tab: aiTab },
       gallery: { btn: tabGalleryBtn, tab: galleryTab },
+      objects: { btn: tabObjectsBtn, tab: objectsTab },
+      robots: { btn: tabRobotsBtn, tab: robotsTab },
       settings: { btn: tabSettingsBtn, tab: settingsTab },
     };
   }
@@ -118,6 +167,7 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
   function close() {
     if (!isOpen()) return;
     session.abort();
+    functionsPanel?.close();
     panel.classList.remove('open');
     panel.setAttribute('aria-hidden', 'true');
     button.setAttribute('aria-expanded', 'false');
@@ -154,10 +204,20 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
     aiTab.prefill('/space ');
   }
 
+  function openObjectTool(record, object = null) {
+    session.setToolMode({ tool: 'object', building: record, object, objects: townStore.getObjects(record.id) });
+    aiTab.setReference(object ? { object, building: record } : { building: record });
+    open();
+    setTab('ai');
+    aiTab.prefill('/object ');
+  }
+
   button.addEventListener('click', toggle);
   panel.querySelector('#menu-close').addEventListener('click', close);
   tabAiBtn.addEventListener('click', () => setTab('ai'));
   tabGalleryBtn.addEventListener('click', () => setTab('gallery'));
+  tabObjectsBtn.addEventListener('click', () => setTab('objects'));
+  tabRobotsBtn.addEventListener('click', () => setTab('robots'));
   tabSettingsBtn.addEventListener('click', () => setTab('settings'));
   expandBtn.addEventListener('click', () => manager.expand());
   siteBtn.addEventListener('click', () => {
@@ -179,6 +239,8 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
 
   townStore.subscribe(refreshActions);
   refreshActions();
+  openCbs.add(objectsTab.refresh);
+  openCbs.add(robotsTab.refresh);
 
   host.appendChild(button);
   host.appendChild(panel);
@@ -189,6 +251,9 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
     session,
     aiTab,
     galleryTab,
+    objectsTab,
+    robotsTab,
+    functionsPanel,
     open,
     close,
     toggle,
@@ -196,6 +261,7 @@ export function createMenu({ store, townStore, manager, onLocate, onPickSite, ho
     setTab,
     openWithSite,
     openWithBuilding,
+    openObjectTool,
     onOpen(fn) {
       openCbs.add(fn);
       return () => openCbs.delete(fn);

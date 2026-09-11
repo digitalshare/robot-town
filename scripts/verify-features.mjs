@@ -83,6 +83,10 @@ async function townState(page) {
   return page.evaluate(() => JSON.parse(localStorage.getItem('robot-town.town.v1')));
 }
 
+async function aiState(page) {
+  return page.evaluate(() => JSON.parse(localStorage.getItem('robot-town.ai.v1')));
+}
+
 async function sendBuilding(page, text) {
   await page.click('#tab-btn-ai');
   await page.fill('#chat-input', text);
@@ -178,6 +182,18 @@ try {
   check('empty search shows the empty state', await page.isVisible('.gallery__empty'));
   await page.fill('#gallery-search', '');
   check('clearing the search restores 12 cards', (await page.locator('.gallery-card').count()) === 12);
+
+  check('robots tab button exists', await page.isVisible('#tab-btn-robots'));
+  await page.click('#tab-btn-robots');
+  check('robots tabpanel visible', await page.isVisible('#tab-robots'));
+  check('robot library lists the three types', (await page.locator('.robot-card').count()) === 3);
+  check(
+    'robot cards carry a type badge',
+    (await page.textContent('.robot-card[data-type="hauler"] .robot-card__cat')) === 'HAULER'
+  );
+  check('add buttons wait for a room', await page.isDisabled('.robot-card[data-type="unit"] [data-act="add"]'));
+  check('town roster shows the empty state', (await page.textContent('#robots-town')).includes('NO ROBOTS YET'));
+  check('town roster counts zero', (await page.textContent('#robots-count')) === '0 IN THE TOWN');
 
   await page.click('#tab-btn-settings');
   await page.click('#provider-add');
@@ -409,6 +425,115 @@ try {
   check('removal clears the placement', (await townState(page)).placements.length === 0);
   check('removal drops the orphan library entry', (await townState(page)).library.length === 0);
   check('site freed again after removal', (await stats(page)).freeCells === 12);
+
+  // 8. functions panel: per-command system prompts and call history
+  await page.click('#tab-btn-settings');
+  const headings = await page.evaluate(() => [...document.querySelectorAll('.settings__heading')].map((n) => n.textContent.trim()));
+  check('settings lists a FUNCTIONS section', headings.includes('FUNCTIONS'));
+  check(
+    'functions section explains itself',
+    (await page.textContent('.settings__group .settings__note')).includes('PER-COMMAND SYSTEM PROMPTS')
+  );
+  check('functions section offers the panel', await page.isVisible('#functions-open'));
+  await page.click('#functions-open');
+  check('functions panel opens', await page.isVisible('#functions-panel'));
+  check('panel lists the three function calls', (await page.locator('#fn-list .fn-row').count()) === 3);
+  check('detail hidden until a function is picked', !(await page.isVisible('#fn-detail')));
+  await page.screenshot({ path: 'shots/f-07-functions.png' });
+
+  await page.click('.fn-row[data-fn="building"]');
+  check('picking a function opens its detail', await page.isVisible('#fn-detail'));
+  const defaultPrompt = await page.inputValue('#fn-prompt');
+  check(
+    'prompt prefills the default instructions',
+    defaultPrompt.includes('TOOL create_building') && defaultPrompt.includes('SCHEMA:')
+  );
+  check('default prompt carries the worked example', defaultPrompt.includes('LOOKOUT TOWER'));
+  check('live context is not part of the editable prompt', !defaultPrompt.includes('SITE REFERENCE'));
+
+  check('history lists the earlier building calls', (await page.locator('#fn-calls .fn-call').count()) > 0);
+  const firstHead = '#fn-calls .fn-call:first-child .fn-call__head';
+  await page.click(firstHead);
+  check('expanding a call opens its body', await page.isVisible('#fn-calls .fn-call:first-child .fn-call__body'));
+  const firstPrompt = await page.textContent('#fn-calls .fn-call:first-child .fn-call__prompt');
+  check(
+    'expanded call shows the final prompt',
+    firstPrompt.includes('[SYSTEM]') && firstPrompt.includes('TOOL create_building')
+  );
+  check('expanded call shows the user turn', firstPrompt.includes('a lookout tower for the reload test'));
+  check('expanded call reports its status', (await page.textContent('#fn-calls .fn-call:first-child .fn-call__status')) === 'OK');
+  await page.click(firstHead);
+  check('clicking again collapses the call', !(await page.isVisible('#fn-calls .fn-call:first-child .fn-call__body')));
+
+  const custom = 'CUSTOM BUILDING RULES — return one fenced json building spec.';
+  await page.fill('#fn-prompt', custom);
+  await page.click('#fn-save');
+  check('save reports the stored prompt', (await page.textContent('#fn-status')).includes('SAVED'));
+  check('saved row carries the custom badge', await page.isVisible('.fn-row[data-fn="building"] .fn-row__badge'));
+  check('saved prompt persisted to the ai store', (await aiState(page)).functions.building === custom);
+  await page.click('#functions-close');
+  check('close button hides the panel', !(await page.isVisible('#functions-panel')));
+
+  await sendBuilding(page, '/building a marker tower');
+  check('the saved prompt is the whole system message', recorded.chat.messages[0].content === custom);
+  await page.waitForSelector('#confirm-bar:not([hidden])', { timeout: 5000 });
+  check('the review pipeline still works with an override', (await page.evaluate(() => window.__town__.reviewInfo())) !== null);
+  await page.click('#confirm-no');
+  await page.waitForTimeout(300);
+  const withOverride = await aiState(page);
+  check('the newest call stores the override', withOverride.calls[0].fn === 'building' && withOverride.calls[0].system === custom);
+
+  await page.click('#tab-btn-settings');
+  await page.click('#functions-open');
+  check('reopening keeps the selected function', (await page.inputValue('#fn-prompt')) === custom);
+  await page.fill('#fn-prompt', '   ');
+  await page.click('#fn-save');
+  check('an empty save reports the fallback', (await page.textContent('#fn-status')).includes('EMPTY'));
+  check('an empty save clears the stored prompt', (await aiState(page)).functions.building === null);
+  check('an empty save hides the badge again', (await page.getAttribute('.fn-row[data-fn="building"]', 'data-custom')) === 'false');
+  await page.click('#functions-close');
+
+  await sendBuilding(page, '/building a marker tower for the fallback');
+  check('the default prompt returns after an empty save', recorded.chat.messages[0].content.includes('TOOL create_building'));
+  await page.waitForSelector('#confirm-bar:not([hidden])', { timeout: 5000 });
+  await page.click('#confirm-no');
+  await page.waitForTimeout(300);
+
+  await page.click('#tab-btn-settings');
+  await page.click('#functions-open');
+  await page.fill('#fn-prompt', custom);
+  await page.click('#fn-save');
+  check('reset needs a saved prompt to clear', (await page.getAttribute('.fn-row[data-fn="building"]', 'data-custom')) === 'true');
+  await page.click('#fn-reset');
+  check('reset restores the default text', (await page.inputValue('#fn-prompt')).includes('TOOL create_building'));
+  check('reset clears the stored prompt', (await aiState(page)).functions.building === null);
+  check('reset clears the badge', (await page.getAttribute('.fn-row[data-fn="building"]', 'data-custom')) === 'false');
+
+  check('history still holds the calls', (await page.locator('#fn-calls .fn-call').count()) > 0);
+  await page.click('#fn-clear');
+  check('clear empties the history', (await page.locator('#fn-calls .fn-call').count()) === 0);
+  check('clear shows the empty note', await page.isVisible('#fn-calls-empty'));
+
+  await page.click('#fn-prompt');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(250);
+  check('escape closes the panel', !(await page.isVisible('#functions-panel')));
+  check('escape leaves the drawer open', await page.evaluate(() => document.getElementById('menu-panel').classList.contains('open')));
+
+  await page.reload();
+  await page.waitForFunction(() => window.__TOWN_READY__ === true, null, { timeout: 30000 });
+  await page.waitForTimeout(400);
+  const aiReloaded = await aiState(page);
+  check('the functions slice survives the reload', JSON.stringify(aiReloaded.functions) === '{"building":null,"space":null,"object":null}');
+  check('the cleared history survives the reload', aiReloaded.calls.length === 0);
+  check('the provider survives the reload', aiReloaded.providers.length === 1 && aiReloaded.activeProviderId !== null);
+  await openMenu(page);
+  await page.click('#tab-btn-settings');
+  await page.click('#functions-open');
+  await page.click('.fn-row[data-fn="building"]');
+  check('history is empty after the reload', (await page.locator('#fn-calls .fn-call').count()) === 0);
+  check('the empty note shows after the reload', await page.isVisible('#fn-calls-empty'));
+  check('the default prompt is offered after the reload', (await page.inputValue('#fn-prompt')).includes('TOOL create_building'));
 
   await browser.close();
   console.log(failures === 0 ? 'PASS: all checks' : `FAIL: ${failures} check(s) failed`);

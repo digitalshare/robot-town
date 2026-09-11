@@ -1,13 +1,55 @@
+import { FUNCTION_IDS } from './functions.js';
+
 const KEY = 'robot-town.ai.v1';
 const VERSION = 1;
 const PROTOCOLS = ['openai', 'anthropic', 'google'];
+const PROMPT_CAP = 12000;
+const MAX_CALLS = 20;
+const CALL_STATUS = ['ok', 'aborted', 'error'];
+const SYSTEM_CAP = 8000;
+const MAX_CALL_MESSAGES = 6;
+const MESSAGE_CAP = 1200;
+const REPLY_CAP = 2000;
+
+function clampText(value, max) {
+  const text = String(value ?? '');
+  return text.length > max ? text.slice(0, max) + '…' : text;
+}
+
+function emptyFunctions() {
+  return Object.fromEntries(FUNCTION_IDS.map((id) => [id, null]));
+}
+
+function normalizeCall(raw) {
+  if (!raw || typeof raw !== 'object' || !FUNCTION_IDS.includes(raw.fn)) return null;
+  return {
+    id: typeof raw.id === 'string' && raw.id ? raw.id : newId(),
+    fn: raw.fn,
+    at: Number(raw.at) || 0,
+    status: CALL_STATUS.includes(raw.status) ? raw.status : 'ok',
+    message: clampText(raw.message, 300),
+    system: clampText(raw.system, SYSTEM_CAP),
+    messages: (Array.isArray(raw.messages) ? raw.messages : []).slice(-MAX_CALL_MESSAGES).map((m) => ({
+      role: m?.role === 'assistant' ? 'assistant' : m?.role === 'system' ? 'system' : 'user',
+      content: clampText(m?.content, MESSAGE_CAP),
+    })),
+    reply: clampText(raw.reply, REPLY_CAP),
+  };
+}
 
 function newId() {
   return (globalThis.crypto?.randomUUID?.() ?? 'p-' + Math.random().toString(36).slice(2, 10)).replace(/-/g, '').slice(0, 12);
 }
 
 function emptyState() {
-  return { version: VERSION, providers: [], activeProviderId: null, ui: { tab: 'ai', consoleCollapsed: false } };
+  return {
+    version: VERSION,
+    providers: [],
+    activeProviderId: null,
+    functions: emptyFunctions(),
+    calls: [],
+    ui: { tab: 'ai', consoleCollapsed: false },
+  };
 }
 
 function normalizeProvider(raw, seenIds) {
@@ -37,12 +79,20 @@ function normalizeState(raw) {
     .map((p) => normalizeProvider(p, seen))
     .filter(Boolean);
   const activeProviderId = providers.some((p) => p.id === raw.activeProviderId) ? raw.activeProviderId : null;
+  const functions = emptyFunctions();
+  for (const id of FUNCTION_IDS) {
+    const saved = raw.functions?.[id];
+    if (typeof saved === 'string' && saved.trim()) functions[id] = saved.slice(0, PROMPT_CAP);
+  }
+  const calls = (Array.isArray(raw.calls) ? raw.calls : []).map(normalizeCall).filter(Boolean).slice(0, MAX_CALLS);
   return {
     version: VERSION,
     providers,
     activeProviderId,
+    functions,
+    calls,
     ui: {
-      tab: ['ai', 'gallery', 'settings'].includes(raw.ui?.tab) ? raw.ui.tab : 'ai',
+      tab: ['ai', 'gallery', 'objects', 'robots', 'settings'].includes(raw.ui?.tab) ? raw.ui.tab : 'ai',
       consoleCollapsed: raw.ui?.consoleCollapsed === true,
     },
   };
@@ -64,13 +114,18 @@ export function createAiStore(storage = globalThis.localStorage) {
   }
 
   function persist() {
-    try {
-      storage?.setItem(KEY, JSON.stringify(state));
-    } catch {
-      if (!warned) {
-        warned = true;
-        console.warn('robot-town: could not persist AI settings (storage unavailable)');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        storage?.setItem(KEY, JSON.stringify(state));
+        return;
+      } catch {
+        if (!state.calls.length) break;
+        state.calls = attempt === 0 ? state.calls.slice(0, Math.ceil(state.calls.length / 2)) : [];
       }
+    }
+    if (!warned) {
+      warned = true;
+      console.warn('robot-town: could not persist AI settings (storage unavailable)');
     }
   }
 
@@ -154,6 +209,29 @@ export function createAiStore(storage = globalThis.localStorage) {
           p.model = '';
         }
       });
+    },
+    getFunctionPrompt(id) {
+      return FUNCTION_IDS.includes(id) ? state.functions[id] ?? null : null;
+    },
+    setFunctionPrompt(id, text) {
+      if (!FUNCTION_IDS.includes(id)) return;
+      const saved = String(text ?? '').trim().slice(0, PROMPT_CAP);
+      state.functions[id] = saved || null;
+      commit('functions');
+    },
+    recordCall(call) {
+      const entry = normalizeCall({ ...call, id: newId(), at: Date.now() });
+      if (!entry) return;
+      state.calls.unshift(entry);
+      if (state.calls.length > MAX_CALLS) state.calls.length = MAX_CALLS;
+      commit('calls');
+    },
+    callsFor(id) {
+      return state.calls.filter((c) => c.fn === id);
+    },
+    clearCalls(id) {
+      state.calls = id ? state.calls.filter((c) => c.fn !== id) : [];
+      commit('calls');
     },
     setUi(patch) {
       state.ui = { ...state.ui, ...patch };

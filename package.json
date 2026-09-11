@@ -1,7 +1,7 @@
 {
   "name": "robot-town",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,8 @@
     "verify": "node scripts/verify.mjs",
     "verify:ai": "node scripts/verify-ai.mjs",
     "verify:features": "node scripts/verify-features.mjs",
-    "verify:spaces": "node scripts/verify-spaces.mjs"
+    "verify:spaces": "node scripts/verify-spaces.mjs",
+    "verify:objects": "node scripts/verify-objects.mjs"
   },
   "dependencies": {
     "three": "^0.170.0"

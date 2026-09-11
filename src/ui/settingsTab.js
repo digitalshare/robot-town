@@ -2,9 +2,10 @@ import { el, clear, maskKey, renderStatus } from './dom.js';
 import { createProviderForm } from './providerForm.js';
 import { getAdapter } from '../ai/providers/index.js';
 
-export function createSettingsTab({ store }) {
+export function createSettingsTab({ store, onOpenFunctions }) {
   const list = el('div', { id: 'provider-list', className: 'provider-list' });
   const addBtn = el('button', { id: 'provider-add', className: 'btn', text: 'ADD PROVIDER' });
+  const functionsBtn = el('button', { id: 'functions-open', className: 'btn', text: 'OPEN FUNCTIONS PANEL' });
 
   let confirmId = null;
   let confirmTimer = null;
@@ -27,7 +28,17 @@ export function createSettingsTab({ store }) {
     }),
     list,
     addBtn,
-    form.el
+    form.el,
+    el(
+      'div',
+      { className: 'settings__group' },
+      el('h2', { className: 'settings__heading', text: 'FUNCTIONS' }),
+      el('p', {
+        className: 'settings__note',
+        text: 'PER-COMMAND SYSTEM PROMPTS AND CALL HISTORY FOR /BUILDING, /SPACE AND /OBJECT.',
+      }),
+      functionsBtn
+    )
   );
 
   function cardFor(provider) {
@@ -102,6 +113,8 @@ export function createSettingsTab({ store }) {
     form.load(null);
     form.el.scrollIntoView({ block: 'nearest' });
   });
+
+  functionsBtn.addEventListener('click', () => onOpenFunctions?.());
 
   store.subscribe((state, reason) => {
     if (reason === 'providers' || reason === 'active' || reason === 'test' || reason === 'model') renderList();

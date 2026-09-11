@@ -1,39 +1,27 @@
 import * as THREE from 'three';
-import { MAT, box, rbox, cyl } from '../materials/palette.js';
-import { screenFace } from '../helpers/tech.js';
+import { robotMeshFor } from './robotTypes.js';
 
 const SPEED = 2.2;
-
-export function robotMesh(index) {
-  const g = new THREE.Group();
-  g.userData.name = `UNIT-${String(index + 1).padStart(2, '0')}`;
-  g.add(cyl(0.42, 0.5, 0.24, MAT.wallDark, 14, 0, 0.12, 0));
-  g.add(rbox(0.9, 1, 0.7, MAT.wallWhite, 0, 0.86, 0, 0.16));
-  g.add(box(0.62, 0.5, 0.18, MAT.wallGray, 0, 0.95, -0.42));
-  const visor = screenFace(0.56, 0.22, MAT.screen);
-  visor.position.set(0, 1.08, 0.36);
-  g.add(visor);
-  for (const sx of [-1, 1]) g.add(cyl(0.13, 0.13, 0.5, MAT.wallGray, 10, sx * 0.56, 1.12, 0));
-  g.add(cyl(0.03, 0.03, 0.42, MAT.wallDark, 6, 0.22, 1.57, -0.14, false));
-  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), MAT.cyan);
-  tip.position.set(0.22, 1.82, -0.14);
-  g.add(tip);
-  return g;
-}
 
 function seedOf(count) {
   let s = (count * 2654435761) >>> 0 || 7;
   return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
 }
 
-export function createRobots({ group, room, obstacles = [], count = 4 }) {
-  const rnd = seedOf(count);
-  const blocked = obstacles.map((o) => ({
+function inflate(rects) {
+  return rects.map((o) => ({
     minX: o.x - o.w / 2 - 0.8,
     maxX: o.x + o.w / 2 + 0.8,
     minZ: o.z - o.d / 2 - 0.8,
     maxZ: o.z + o.d / 2 + 0.8,
   }));
+}
+
+// One bot per stored robot entity. The entity's pos is its home: wanderers roam
+// away from it, idle bots stay put, and neither ever writes the live position back.
+export function createRobots({ group, room, obstacles = [], entities = [] }) {
+  const rnd = seedOf(entities.length);
+  let blocked = inflate(obstacles);
   const limX = Math.max(1, room.w / 2 - room.margin);
   const limZ = Math.max(1, room.d / 2 - room.margin);
 
@@ -53,21 +41,44 @@ export function createRobots({ group, room, obstacles = [], count = 4 }) {
   }
 
   const bots = [];
-  for (let i = 0; i < count; i++) {
-    const node = robotMesh(i);
-    const start = sample(null);
-    node.position.set(start.x, 0, start.z);
-    node.rotation.y = rnd() * Math.PI * 2;
+  for (const entity of entities) {
+    const node = robotMeshFor(entity.type, entity.accent, entity.scale);
+    node.userData.isRobot = true;
+    node.userData.robotId = entity.id;
+    node.userData.name = entity.name;
+    const home = { x: entity.pos[0], z: entity.pos[1] };
+    node.position.set(home.x, 0, home.z);
+    node.rotation.y = THREE.MathUtils.degToRad(entity.rot);
     group.add(node);
-    bots.push({ node, target: sample(start), wait: rnd() * 0.8, t: rnd() * 4, phase: rnd() * Math.PI * 2 });
+    bots.push({
+      node,
+      home,
+      wander: entity.wander !== false,
+      target: entity.wander === false ? { ...home } : sample(home),
+      wait: rnd() * 0.8,
+      t: rnd() * 4,
+      phase: rnd() * Math.PI * 2,
+    });
   }
 
   return {
     count: bots.length,
+    setObstacles(rects) {
+      blocked = inflate(Array.isArray(rects) ? rects : []);
+      for (const b of bots) {
+        if (b.wander && !free(b.target.x, b.target.z)) b.target = sample(b.node.position);
+      }
+    },
     update(dt) {
       const step = Math.min(dt, 0.05);
       for (const b of bots) {
         b.t += step;
+        if (!b.wander) {
+          b.node.position.x = b.home.x;
+          b.node.position.z = b.home.z;
+          b.node.position.y = Math.abs(Math.sin(b.t * 2 + b.phase)) * 0.02;
+          continue;
+        }
         if (b.wait > 0) {
           b.wait -= step;
           b.node.position.y = Math.abs(Math.sin(b.t * 2 + b.phase)) * 0.02;
@@ -90,6 +101,9 @@ export function createRobots({ group, room, obstacles = [], count = 4 }) {
     },
     positions() {
       return bots.map((b) => [Math.round(b.node.position.x * 100) / 100, Math.round(b.node.position.z * 100) / 100]);
+    },
+    targets() {
+      return bots.map((b) => [Math.round(b.target.x * 100) / 100, Math.round(b.target.z * 100) / 100]);
     },
   };
 }

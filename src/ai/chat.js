@@ -1,47 +1,31 @@
-import { BUILDINGS, SECTOR, CHARGING_PADS, GRID } from '../data/layout.js';
 import { getAdapter } from './providers/index.js';
 import { trimHistory } from './messages.js';
 import { aiError, toRequestError } from './http.js';
-import { parseSlashCommand, buildingToolContext, spaceToolContext } from './tools.js';
+import { parseSlashCommand, townSystemPrompt } from './tools.js';
+import { functionFor } from './functions.js';
 import { roomFor } from '../interior/spaceSpec.js';
 
-export function townSystemPrompt({ tool = null } = {}) {
-  const facilities = BUILDINGS.map((b) => `- ${b.name} (id ${b.id}, x ${b.x}, z ${b.z}, footprint ${b.footprint[0]} x ${b.footprint[1]})`).join(
-    '\n'
-  );
-  const lines = [
-    `You are the operations assistant for ${SECTOR.label}, an isometric 3D robot town rendered in the browser with three.js.`,
-    'The user is looking at the town and can hover buildings to see their names.',
-    'Facilities in this sector:',
-    facilities,
-    `${CHARGING_PADS.length} charging pads; road grid lines at x/z = ${GRID.linesX.join(', ')}.`,
-    'Answer in 2-4 short sentences unless asked for detail.',
-  ];
-  if (tool) {
-    lines.push(`You have one tool, ${tool}. Use it only through the schema below.`);
-  } else {
-    lines.push('You have no tools and cannot change the scene.');
-    lines.push('If asked to modify the town, name the files a developer would edit (src/data/layout.js, src/buildings/*).');
-  }
-  return lines.join('\n');
-}
-
-export function createChatSession(store, { systemPrompt = null } = {}) {
+export function createChatSession(store, { systemPrompt = null, townStore = null } = {}) {
   const history = [];
   const messageCbs = new Set();
   let controller = null;
   let streaming = false;
   let toolMode = null;
 
+  function promptArgs(mode) {
+    const record = mode.building ?? null;
+    const room = mode.room ?? (record ? roomFor(record) : null);
+    if (mode.tool === 'building') return { site: mode.site ?? null };
+    if (mode.tool === 'space') return { record, room, space: record ? townStore?.getSpace?.(record.id) ?? null : null };
+    return { record, room, source: mode.object ?? null, objects: mode.objects ?? [] };
+  }
+
   function resolveSystem(mode) {
     if (typeof systemPrompt === 'function') return systemPrompt(mode);
-    if (mode?.tool === 'building') {
-      return `${townSystemPrompt({ tool: 'create_building' })}\n${buildingToolContext({ site: mode.site })}`;
-    }
-    if (mode?.tool === 'space') {
-      return `${townSystemPrompt({ tool: 'create_space' })}\n${spaceToolContext({ record: mode.building, room: roomFor(mode.building) })}`;
-    }
-    return townSystemPrompt();
+    const fn = functionFor(mode?.tool);
+    if (!fn) return townSystemPrompt();
+    const { base, context } = fn.parts(promptArgs(mode));
+    return [store.getFunctionPrompt?.(fn.id) ?? base, context].filter(Boolean).join('\n');
   }
 
   function abort() {
@@ -60,34 +44,58 @@ export function createChatSession(store, { systemPrompt = null } = {}) {
     }
 
     const command = parseSlashCommand(text);
-    const named = command?.name === 'building' || command?.name === 'space' ? command.name : null;
+    const named = ['building', 'space', 'object'].includes(command?.name) ? command.name : null;
     const tool = named ?? toolMode?.tool ?? null;
     if (tool === 'space' && !toolMode?.building) {
       onError?.(aiError('NO BUILDING ATTACHED — CLICK A BUILDING AND CHOOSE DESIGN WITH AI', { kind: 'no-target' }));
       return;
     }
+    if (tool === 'object' && (!toolMode?.building || !toolMode?.room)) {
+      onError?.(aiError('NO ROOM ATTACHED — ENTER A BUILDING FIRST', { kind: 'no-target' }));
+      return;
+    }
     const mode = tool
-      ? { tool, site: toolMode?.site ?? null, building: toolMode?.building ?? null, command: Boolean(named) }
+      ? {
+          tool,
+          site: toolMode?.site ?? null,
+          building: toolMode?.building ?? null,
+          room: toolMode?.room ?? null,
+          object: toolMode?.object ?? null,
+          objects: toolMode?.objects ?? [],
+          command: Boolean(named),
+        }
       : null;
     const userText = command ? command.args || text : text;
 
     abort();
     history.push({ role: 'user', content: userText });
+    const messages = [{ role: 'system', content: resolveSystem(mode) }, ...trimHistory(history)];
     onStart?.();
     streaming = true;
     controller = new AbortController();
 
     let acc = '';
+    const record = (status, message) => {
+      if (!mode?.tool) return;
+      store.recordCall?.({
+        fn: mode.tool,
+        system: messages[0].content,
+        messages: messages.slice(1),
+        reply: acc,
+        status,
+        message,
+      });
+    };
     const finish = (aborted) => {
       if (acc) history.push({ role: 'assistant', content: acc });
       streaming = false;
       controller = null;
+      record(aborted ? 'aborted' : 'ok', '');
       onEnd?.({ aborted, text: acc });
       if (!aborted) for (const fn of messageCbs) fn({ text: acc, mode });
     };
 
     try {
-      const messages = [{ role: 'system', content: resolveSystem(mode) }, ...trimHistory(history)];
       await getAdapter(provider.protocol).streamChat(provider, provider.model, messages, {
         signal: controller.signal,
         onDelta: (t) => {
@@ -104,7 +112,9 @@ export function createChatSession(store, { systemPrompt = null } = {}) {
       if (acc) history.push({ role: 'assistant', content: acc });
       streaming = false;
       controller = null;
-      onError?.(toRequestError(err, provider));
+      const failure = toRequestError(err, provider);
+      record('error', failure.message);
+      onError?.(failure);
     }
   }
 
@@ -123,10 +133,23 @@ export function createChatSession(store, { systemPrompt = null } = {}) {
         toolMode = null;
         return null;
       }
-      toolMode =
-        mode.tool === 'space'
-          ? { tool: 'space', building: mode.building ?? null, site: null }
-          : { tool: 'building', site: mode.site ?? null, building: null };
+      switch (mode.tool) {
+        case 'space':
+          toolMode = { tool: 'space', building: mode.building ?? null, site: null, object: null };
+          break;
+        case 'object':
+          toolMode = {
+            tool: 'object',
+            building: mode.building ?? null,
+            room: mode.room ?? (mode.building ? roomFor(mode.building) : null),
+            object: mode.object ?? null,
+            objects: Array.isArray(mode.objects) ? mode.objects : [],
+            site: null,
+          };
+          break;
+        default:
+          toolMode = { tool: 'building', site: mode.site ?? null, building: null, object: null };
+      }
       return toolMode;
     },
     onMessage(fn) {

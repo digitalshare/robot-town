@@ -124,6 +124,13 @@ async function interiorStats(page) {
   return page.evaluate(() => window.__town__.interior.stats());
 }
 
+// The bar appends " · N OBJECTS", and every room now holds its seeded default layout.
+async function interiorStateIs(page, base) {
+  const text = (await page.textContent('#interior-state')).trim();
+  const { objects } = await interiorStats(page);
+  return text === (objects ? `${base} · ${objects} OBJECT${objects === 1 ? '' : 'S'}` : base);
+}
+
 async function send(page, text) {
   await page.click('#tab-btn-ai');
   await page.fill('#chat-input', text);
@@ -259,7 +266,7 @@ try {
   check('interior bar names the building', (await page.textContent('#interior-name')) === 'DATA CORE HUB');
   check(
     'interior bar flags the generated shell',
-    (await page.textContent('#interior-state')) === 'GENERATED SHELL — NOT DESIGNED YET'
+    await interiorStateIs(page, 'GENERATED SHELL — NOT DESIGNED YET')
   );
   check('shell state marked undesigned', (await page.getAttribute('#interior-state', 'data-designed')) === 'no');
   check('prompt bar hidden inside', !(await page.isVisible('#confirm-bar')));
@@ -275,6 +282,18 @@ try {
   check('shell has no designed props', shell.props === 0 && shell.designed === false);
   check('shell populates robots from the room size', shell.robots >= 2 && shell.robots <= 12);
   check('shell reports the building type', shell.type === 'datacore');
+
+  const shellRoster = (await townState(page)).robots ?? [];
+  check(
+    'the shell roster is stored for the building',
+    shellRoster.length === shell.robots && shellRoster.every((r) => r.buildingId === 'datacore'),
+    shellRoster.length
+  );
+  check(
+    'stored shell robots are wandering defaults',
+    shellRoster.every((r) => r.origin === 'default' && r.wander === true),
+    shellRoster.map((r) => [r.origin, r.wander])
+  );
 
   const first = await page.evaluate(() => window.__town__.interior.robotPositions());
   await page.waitForTimeout(700);
@@ -370,6 +389,8 @@ try {
     'slash command stripped from the user turn',
     recorded.chat.messages.at(-1).content === 'a cold-aisle server room for the data core'
   );
+  check('first /space reports no current space', sys.includes('CURRENT SPACE: none'));
+  check('first /space carries the update instruction', sys.includes('UPDATE MODE'));
 
   const stored = await townState(page);
   check('space stored for the building', stored.spaces.length === 1 && stored.spaces[0].buildingId === 'datacore');
@@ -383,15 +404,27 @@ try {
   check('designed room flags the spec', designed.designed === true);
   check('designed props added on top of the fixtures', designed.props === 5 && designed.fixtures >= 3);
   check('robot count follows the spec', designed.robots === 4);
+  const designedRoster = ((await townState(page)).robots ?? []).filter((r) => r.buildingId === 'datacore');
+  check(
+    'the design replaces the roster with the spec family',
+    designedRoster.length === 4 && designedRoster.every((r) => r.origin === 'spec'),
+    designedRoster.map((r) => r.origin)
+  );
+  check('the design drops the shell defaults', !designedRoster.some((r) => r.origin === 'default'));
   check(
     'interior bar flags the design',
-    (await page.textContent('#interior-state')) === 'AI-DESIGNED SPACE' &&
+    (await interiorStateIs(page, 'AI-DESIGNED SPACE')) &&
       (await page.getAttribute('#interior-state', 'data-designed')) === 'yes'
   );
   await page.screenshot({ path: 'shots/s-03-designed.png' });
 
   // 5. invalid and prose-only replies are rejected
   await send(page, '/space INVALID');
+  const sys2 = recorded.chat.messages[0].content;
+  check('second /space attaches the current space', sys2.includes('CURRENT SPACE (5 parts, 4 robots):'));
+  check('second /space echoes the stored design', sys2.includes('-8.6') && sys2.includes('9.7'));
+  check('second /space demands the complete spec', sys2.includes('COMPLETE updated spec'));
+  check('second /space keeps the room reference', sys2.includes('ROOM REFERENCE: DATA CORE HUB'));
   check('invalid space rejected in the status line', /OUTSIDE THE ROOM|UNKNOWN KIND/.test(await statusText(page)));
   check('invalid space status marked error', (await page.getAttribute('#chat-status', 'data-status')) === 'error');
   check('invalid space leaves the stored design alone', (await townState(page)).spaces.length === 1);
@@ -507,7 +540,7 @@ try {
   check('designed props restored after reload', (await interiorStats(page)).props === 5);
   check(
     'interior bar still flags the design after reload',
-    (await page.textContent('#interior-state')) === 'AI-DESIGNED SPACE'
+    await interiorStateIs(page, 'AI-DESIGNED SPACE')
   );
   const r1 = await page.evaluate(() => window.__town__.interior.robotPositions());
   await page.waitForTimeout(700);

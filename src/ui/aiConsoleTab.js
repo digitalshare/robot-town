@@ -34,7 +34,7 @@ export function createAiConsoleTab({ store, session, onConfigure }) {
   const input = el('textarea', {
     id: 'chat-input',
     rows: '1',
-    placeholder: 'ASK ABOUT THE TOWN — OR /BUILDING · /SPACE <YOUR IDEA>',
+    placeholder: 'ASK ABOUT THE TOWN — OR /BUILDING · /SPACE · /OBJECT <YOUR IDEA>',
   });
   const sendBtn = el('button', { id: 'chat-send', className: 'btn btn--primary', text: 'SEND', disabled: true });
   const stopBtn = el('button', { id: 'chat-stop', className: 'btn', text: 'STOP', hidden: true });
@@ -112,8 +112,9 @@ export function createAiConsoleTab({ store, session, onConfigure }) {
 
   function setReference(ref) {
     const site = ref?.site;
+    const object = ref?.object;
     const building = ref?.building;
-    if (!site && !building) {
+    if (!site && !object && !building) {
       refBanner.hidden = true;
       refText.textContent = '';
       return;
@@ -121,6 +122,10 @@ export function createAiConsoleTab({ store, session, onConfigure }) {
     if (site) {
       refText.textContent = `SITE ${site.x}, ${site.z} · PLOT ${site.plot[0]} × ${site.plot[1]}`;
       refClear.textContent = 'CLEAR SITE';
+    } else if (object) {
+      const kind = String(object.part?.kind ?? '').toUpperCase();
+      refText.textContent = `OBJECT ${object.name} · ${kind} IN ${building?.name ?? 'THE ROOM'}`;
+      refClear.textContent = 'CLEAR OBJECT';
     } else {
       refText.textContent = `BUILDING ${building.name} · ${building.footprint[0]} × ${building.footprint[1]} · ${building.badge}`;
       refClear.textContent = 'CLEAR BUILDING';

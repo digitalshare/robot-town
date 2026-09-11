@@ -8,25 +8,9 @@ import { disposeGroup } from './dispose.js';
 import { freeCells as computeFreeCells, occupiedRects } from './plots.js';
 import { tree } from '../helpers/site.js';
 import { chargingPad } from '../helpers/tech.js';
+import { outlineFor } from '../helpers/outline.js';
 
 const GHOST_OPACITY = 0.55;
-const OUTLINE_COLOR = 0x59dcea;
-
-function outlineFor(group) {
-  const bounds = new THREE.Box3().setFromObject(group);
-  const size = bounds.getSize(new THREE.Vector3());
-  const centre = bounds.getCenter(new THREE.Vector3());
-  const box = new THREE.BoxGeometry(size.x, size.y, size.z);
-  const edges = new THREE.EdgesGeometry(box);
-  box.dispose();
-  const outline = new THREE.LineSegments(
-    edges,
-    new THREE.LineBasicMaterial({ color: OUTLINE_COLOR, transparent: true, opacity: 0.9 })
-  );
-  outline.position.copy(centre);
-  outline.raycast = () => {};
-  return outline;
-}
 
 function applyGhost(group) {
   group.traverse((o) => {

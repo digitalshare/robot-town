@@ -2,11 +2,25 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { MAT, box } from '../materials/palette.js';
 import { disposeGroup } from '../town/dispose.js';
-import { roomFor, defaultRobots, buildSpaceFromSpec } from './spaceSpec.js';
-import { themeFor, fixturesFor } from './themes.js';
+import { outlineFor } from '../helpers/outline.js';
+import {
+  roomFor,
+  buildObjectNode,
+  validateObjectPart,
+  halfFor,
+  rotatedHalves,
+  restY,
+  normRot,
+  clampToRoom,
+} from './spaceSpec.js';
+import { themeFor } from './themes.js';
 import { createRobots } from './robots.js';
 
 const AXIS = new THREE.Vector3(72, 78, 72).normalize();
+const CLEARANCE = 0.8;
+const SPOT_RING = 0.6;
+const SPOT_ANGLES = 12;
+const round2 = (n) => Math.round(n * 100) / 100;
 
 function plane(len, h, mat) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(len, h), mat);
@@ -135,7 +149,15 @@ export function createInteriorView({ townStore, dom }) {
   let room = null;
   let robots = null;
   let designed = false;
-  let counts = { fixtures: 0, props: 0 };
+  let counts = { fixtures: 0, props: 0, objects: 0 };
+  let objectsRoot = null;
+  const objectNodes = new Map();
+  let robotsRoot = null;
+  const robotNodes = new Map();
+  let selectedId = null;
+  let selectedRobotId = null;
+  let outline = null;
+  const outlineOffset = new THREE.Vector3();
 
   function frameCamera() {
     const view = Math.max(room.w, room.d) + 10;
@@ -168,40 +190,170 @@ export function createInteriorView({ townStore, dom }) {
   }
 
   function clear() {
+    if (outline) disposeGroup(outline);
+    outline = null;
     if (content) disposeGroup(content);
     content = null;
+    objectsRoot = null;
+    objectNodes.clear();
+    robotsRoot = null;
+    robotNodes.clear();
+    selectedId = null;
+    selectedRobotId = null;
     robots = null;
-    counts = { fixtures: 0, props: 0 };
+    counts = { fixtures: 0, props: 0, objects: 0 };
+  }
+
+  function addObjectNodes() {
+    for (const entry of townStore.getObjects(record.id)) {
+      const node = buildObjectNode(entry.part, entry.rot);
+      node.userData.isObject = true;
+      node.userData.objectId = entry.id;
+      node.userData.name = entry.name;
+      objectsRoot.add(node);
+      objectNodes.set(entry.id, node);
+    }
+  }
+
+  function addRobotNodes() {
+    robots = createRobots({
+      group: robotsRoot,
+      room,
+      obstacles: obstacleRects(),
+      entities: townStore.getRobots(record.id),
+    });
+    for (const node of robotsRoot.children) robotNodes.set(node.userData.robotId, node);
+  }
+
+  function originCounts() {
+    let fixtures = 0;
+    let props = 0;
+    for (const entry of townStore.getObjects(record.id)) {
+      if (entry.origin === 'default') fixtures++;
+      else if (entry.origin === 'spec') props++;
+    }
+    return { fixtures, props, objects: objectNodes.size };
+  }
+
+  function obstacleRects() {
+    scene.updateMatrixWorld(true);
+    return rectsOf([...objectNodes.values()]);
+  }
+
+  function applyOutline(node) {
+    if (outline) disposeGroup(outline);
+    outline = null;
+    if (!node || !content) return;
+    node.updateWorldMatrix(true, true);
+    outline = outlineFor(node);
+    outlineOffset.copy(outline.position).sub(node.position);
+    content.add(outline);
+  }
+
+  function select(id) {
+    const node = id ? objectNodes.get(id) ?? null : null;
+    selectedId = node ? id : null;
+    selectedRobotId = null;
+    applyOutline(node);
+    return selectedId;
+  }
+
+  function selectRobot(id) {
+    const node = id ? robotNodes.get(id) ?? null : null;
+    selectedRobotId = node ? id : null;
+    selectedId = null;
+    applyOutline(node);
+    return selectedRobotId;
+  }
+
+  function resync() {
+    if (selectedRobotId) selectRobot(selectedRobotId);
+    else select(selectedId);
+  }
+
+  function moveObject(id, x, z) {
+    const node = objectNodes.get(id);
+    if (!node || !room) return null;
+    const entry = townStore.getObject(id);
+    if (!entry) return null;
+    const [cx, cz] = clampToRoom(entry.part, room, entry.rot, x, z);
+    node.position.x = cx;
+    node.position.z = cz;
+    if (outline && selectedId === id) outline.position.copy(node.position).add(outlineOffset);
+    return [round2(cx), round2(cz)];
+  }
+
+  function overlaps(part, rot, rects) {
+    const [hw, , hd] = rotatedHalves(halfFor(part.kind, part), rot);
+    for (const o of rects) {
+      if (part.pos[0] + hw <= o.x - o.w / 2 - CLEARANCE || part.pos[0] - hw >= o.x + o.w / 2 + CLEARANCE) continue;
+      if (part.pos[2] + hd <= o.z - o.d / 2 - CLEARANCE || part.pos[2] - hd >= o.z + o.d / 2 + CLEARANCE) continue;
+      return true;
+    }
+    return false;
+  }
+
+  function freeSpotFor(part, rot = 0) {
+    if (!record || !room || !part?.kind) return null;
+    const turn = normRot(rot);
+    const rects = obstacleRects();
+    const reach = Math.max(room.w, room.d) / 2;
+    for (let ring = 0; ring * SPOT_RING <= reach; ring++) {
+      const r = ring * SPOT_RING;
+      const steps = ring === 0 ? 1 : SPOT_ANGLES;
+      for (let i = 0; i < steps; i++) {
+        const angle = (i / steps) * Math.PI * 2;
+        const candidate = {
+          ...part,
+          pos: [round2(Math.cos(angle) * r), restY(part.kind, part), round2(Math.sin(angle) * r)],
+        };
+        const check = validateObjectPart(candidate, room, turn);
+        if (!check.ok || overlaps(check.value, turn, rects)) continue;
+        return check.value.pos;
+      }
+    }
+    return null;
+  }
+
+  function refreshObjects() {
+    if (!record || !objectsRoot) return;
+    for (const node of [...objectsRoot.children]) disposeGroup(node);
+    objectNodes.clear();
+    addObjectNodes();
+    counts.objects = objectNodes.size;
+    robots?.setObstacles(obstacleRects());
+    resync();
+  }
+
+  function refreshRobots() {
+    if (!record || !robotsRoot) return;
+    for (const node of [...robotsRoot.children]) disposeGroup(node);
+    robotNodes.clear();
+    addRobotNodes();
+    resync();
   }
 
   function enter(target) {
     clear();
     record = target;
     room = roomFor(target);
-    designed = false;
     const theme = themeFor(target.type);
 
     content = new THREE.Group();
     scene.add(content);
     content.add(buildShell(room, theme));
 
-    const fixtures = fixturesFor(target, room);
-    for (const f of fixtures) content.add(f);
+    designed = Boolean(townStore.getSpace(target.id));
 
-    const space = townStore.getSpace(target.id);
-    const props = [];
-    if (space) {
-      const built = buildSpaceFromSpec(space.spec);
-      content.add(built);
-      props.push(...built.children);
-      designed = true;
-    }
+    objectsRoot = new THREE.Group();
+    content.add(objectsRoot);
+    addObjectNodes();
 
-    scene.updateMatrixWorld(true);
-    const obstacles = rectsOf(fixtures).concat(rectsOf(props));
-    const count = designed ? space.spec.robots : defaultRobots(room);
-    robots = createRobots({ group: content, room, obstacles, count });
-    counts = { fixtures: fixtures.length, props: props.length };
+    robotsRoot = new THREE.Group();
+    content.add(robotsRoot);
+    addRobotNodes();
+
+    counts = originCounts();
 
     frameLights();
     frameCamera();
@@ -223,7 +375,14 @@ export function createInteriorView({ townStore, dom }) {
     enter,
     exit,
     rebuild() {
-      if (record) enter(record);
+      if (!record) return;
+      const view = { position: camera.position.clone(), zoom: camera.zoom, target: controls.target.clone() };
+      enter(record);
+      camera.position.copy(view.position);
+      camera.zoom = view.zoom;
+      camera.updateProjectionMatrix();
+      controls.target.copy(view.target);
+      controls.update();
     },
     resize() {
       if (room) frameCamera();
@@ -240,6 +399,36 @@ export function createInteriorView({ townStore, dom }) {
     room() {
       return room;
     },
+    select,
+    selectedId() {
+      return selectedId;
+    },
+    selectRobot,
+    selectedRobotId() {
+      return selectedRobotId;
+    },
+    objectIds() {
+      return [...objectNodes.keys()];
+    },
+    robotIds() {
+      return [...robotNodes.keys()];
+    },
+    nodeFor(id) {
+      return objectNodes.get(id) ?? null;
+    },
+    robotNodeFor(id) {
+      return robotNodes.get(id) ?? null;
+    },
+    objectRoot() {
+      return objectsRoot;
+    },
+    robotRoot() {
+      return robotsRoot;
+    },
+    moveObject,
+    refreshObjects,
+    refreshRobots,
+    freeSpotFor,
     stats() {
       if (!record) return null;
       return {
@@ -249,15 +438,21 @@ export function createInteriorView({ townStore, dom }) {
         designed,
         fixtures: counts.fixtures,
         props: counts.props,
-        robots: robots?.count ?? 0,
+        objects: counts.objects,
+        robots: robotNodes.size,
         room: { ...room },
       };
     },
     robotPositions() {
       return robots ? robots.positions() : [];
     },
+    robotTargets() {
+      return robots ? robots.targets() : [];
+    },
     update(dt) {
       robots?.update(dt);
+      const node = selectedRobotId ? robotNodes.get(selectedRobotId) : null;
+      if (node && outline) outline.position.copy(node.position).add(outlineOffset);
       controls.update();
     },
   };
