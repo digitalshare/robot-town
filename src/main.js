@@ -4,6 +4,7 @@ import { createCamera, createControls, resizeCamera } from './core/camera.js';
 import { setupEnvironment, frameSun } from './core/lights.js';
 import { createTownStore } from './town/townStore.js';
 import { createTownManager } from './town/townManager.js';
+import { createTownRobots } from './town/townRobots.js';
 import { findBuildingRecord } from './town/records.js';
 import { createInteriorView } from './interior/interiorView.js';
 import { createHover } from './interaction/hover.js';
@@ -32,8 +33,15 @@ const controls = createControls(camera, renderer.domElement);
 
 const buildingsGroup = new THREE.Group();
 const townStore = createTownStore();
+// Populate every building up front so the streets are alive on first load.
+// Idempotent: a returning user only gains the rooms they never walked into.
+townStore.seedTownRobots();
 const manager = createTownManager({ buildingsGroup, townStore });
 scene.add(manager.town);
+// Sits beside the manager's base and building groups on purpose: base is
+// disposed on every map expansion, and buildingsGroup is raycast recursively by
+// the hover picker, where a robot hit would mask the building behind it.
+const townRobots = createTownRobots({ townStore, parent: manager.town, getGrid: () => manager.getGrid() });
 frameSun(sun, manager.getGrid().bounds);
 
 const sectorChip = document.getElementById('sector-chip');
@@ -42,7 +50,7 @@ const tooltip = document.getElementById('tooltip');
 sectorChip.textContent = SECTOR.label;
 mapChip.textContent = mapChipLabel(townStore.getState().expansions);
 
-const hover = createHover(camera, renderer.domElement, buildingsGroup, tooltip);
+const hover = createHover(camera, renderer.domElement, buildingsGroup, tooltip, townRobots.pickRobot);
 const interior = createInteriorView({ townStore, dom: renderer.domElement });
 
 const aiStore = createAiStore();
@@ -116,9 +124,14 @@ const interiorFlow = createInteriorFlow({ townStore, confirmBar, menu, onEnter: 
 menu.onClose(() => flow.cancel());
 menu.onClose(() => robotPanel.hide());
 
-hover.onClick((group) => {
+hover.onClick((hit) => {
   if (interior.isActive() || siteSelect.isActive() || menu.isOpen()) return;
-  interiorFlow.handleBuildingClick(group?.userData.id ?? null);
+  if (hit?.kind === 'robot') {
+    townRobots.select(hit.id);
+    return;
+  }
+  townRobots.clearSelect();
+  interiorFlow.handleBuildingClick(hit?.kind === 'building' ? hit.id : null);
 });
 
 // The bar label must come from the store: a /space commit fires before the scene
@@ -129,6 +142,7 @@ function enterInterior(record) {
   confirmBar.hide();
   objectPanel.hide();
   robotPanel.hide();
+  townRobots.clearSelect();
   ensureDefaults(record);
   interior.enter(record);
   controls.enabled = false;
@@ -294,6 +308,14 @@ function project(x, y, z, cam = camera) {
   };
 }
 
+const townRay = new THREE.Raycaster();
+const townNdc = new THREE.Vector2();
+function pickTownRobot(clientX, clientY) {
+  townNdc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+  townRay.setFromCamera(townNdc, camera);
+  return townRobots.pickRobot(townRay);
+}
+
 window.__town__ = {
   scene,
   camera,
@@ -353,7 +375,25 @@ window.__town__ = {
     remove: (id) => townStore.removeRobot(id),
     pickAt: (x, y) => objectSelect.pickAt(x, y),
   },
+  townRobots: {
+    count: () => townRobots.count(),
+    positions: () => townRobots.positions(),
+    targets: () => townRobots.targets(),
+    selected: () => townRobots.selectedId(),
+    select: (id) => townRobots.select(id),
+    clearSelect: () => townRobots.clearSelect(),
+    pickAt: (x, y) => pickTownRobot(x, y),
+    obstacles: () => townRobots.obstacles(),
+    stats: () => townRobots.stats(),
+  },
   projectPoint: project,
+  projectTownRobot(id) {
+    const node = townRobots.nodeFor(id);
+    if (!node) return null;
+    scene.updateMatrixWorld(true);
+    const c = new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3());
+    return project(c.x, c.y, c.z);
+  },
   projectObject(id) {
     const node = interior.nodeFor(id);
     if (!node) return null;
@@ -403,8 +443,9 @@ renderer.setAnimationLoop(() => {
     interior.update(clock.getDelta());
     renderer.render(interior.scene, interior.camera);
   } else {
-    clock.getDelta();
+    const dt = clock.getDelta();
     controls.update();
+    townRobots.update(dt);
     hover.update();
     renderer.render(scene, camera);
   }

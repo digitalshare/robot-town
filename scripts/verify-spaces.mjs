@@ -283,12 +283,10 @@ try {
   check('shell populates robots from the room size', shell.robots >= 2 && shell.robots <= 12);
   check('shell reports the building type', shell.type === 'datacore');
 
-  const shellRoster = (await townState(page)).robots ?? [];
-  check(
-    'the shell roster is stored for the building',
-    shellRoster.length === shell.robots && shellRoster.every((r) => r.buildingId === 'datacore'),
-    shellRoster.length
-  );
+  // The town seeds a roster for every building at startup, so state.robots is
+  // town-wide; the shell assertions are about the data core's own roster.
+  const shellRoster = ((await townState(page)).robots ?? []).filter((r) => r.buildingId === 'datacore');
+  check('the shell roster is stored for the building', shellRoster.length === shell.robots, shellRoster.length);
   check(
     'stored shell robots are wandering defaults',
     shellRoster.every((r) => r.origin === 'default' && r.wander === true),

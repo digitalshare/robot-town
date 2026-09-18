@@ -150,6 +150,140 @@ try {
   check('baseline has 12 built-in buildings', base.buildings === 12);
   check('core island has no free build sites', base.freeCells === 0);
 
+  // The same stored robots also walk the outdoor town.
+  const fleet = await page.evaluate(() => ({
+    count: window.__town__.townRobots.count(),
+    stored: window.__town__.robots.all().length,
+  }));
+  check('the town walks every stored robot', fleet.count > 0 && fleet.count === fleet.stored, `${fleet.count} of ${fleet.stored}`);
+  check('the town is seeded on first load', fleet.count >= 12, fleet.count);
+
+  const roamA = await page.evaluate(() => window.__town__.townRobots.positions());
+  await page.waitForTimeout(700);
+  const roamB = await page.evaluate(() => window.__town__.townRobots.positions());
+  check('town robots move over time', JSON.stringify(roamA) !== JSON.stringify(roamB));
+
+  const clearance = await page.evaluate(() => {
+    const t = window.__town__.townRobots;
+    const { radius, bounds } = t.stats();
+    const boxes = t.obstacles();
+    const pos = t.positions();
+    let closest = Infinity;
+    for (let i = 0; i < pos.length; i++) {
+      for (let j = i + 1; j < pos.length; j++) {
+        closest = Math.min(closest, Math.hypot(pos[i][0] - pos[j][0], pos[i][1] - pos[j][1]));
+      }
+    }
+    return {
+      obstacles: boxes.length,
+      inside: pos.filter(([x, z]) =>
+        boxes.some((b) => x > b.minX - radius && x < b.maxX + radius && z > b.minZ - radius && z < b.maxZ + radius)
+      ).length,
+      escaped: pos.filter(
+        ([x, z]) => x < bounds.minX - radius || x > bounds.maxX + radius || z < bounds.minZ - radius || z > bounds.maxZ + radius
+      ).length,
+      closest,
+      min: radius * 2,
+    };
+  });
+  check(
+    'town robots keep clear of every building, tree and pad',
+    clearance.inside === 0,
+    `${clearance.inside} inside ${clearance.obstacles} obstacles`
+  );
+  check('town robots stay inside the map', clearance.escaped === 0, clearance.escaped);
+  check(
+    'town robots do not walk through each other',
+    clearance.closest >= clearance.min - 0.02,
+    `${clearance.closest} apart, minimum ${clearance.min}`
+  );
+
+  const spread = await page.evaluate(() => {
+    const t = window.__town__.townRobots;
+    const pos = t.positions();
+    const { bounds } = t.stats();
+    const xs = pos.map((p) => p[0]);
+    const zs = pos.map((p) => p[1]);
+    return {
+      spanX: Math.max(...xs) - Math.min(...xs),
+      spanZ: Math.max(...zs) - Math.min(...zs),
+      width: bounds.maxX - bounds.minX,
+      awayFromCore: pos.filter(([x, z]) => Math.hypot(x, z) > 20).length,
+      total: pos.length,
+    };
+  });
+  check(
+    'town robots roam the whole map',
+    spread.spanX > spread.width * 0.5 && spread.spanZ > spread.width * 0.5,
+    JSON.stringify(spread)
+  );
+  check('town robots leave the core island', spread.awayFromCore > 0, `${spread.awayFromCore} of ${spread.total}`);
+
+  // Street robots walk, so re-project immediately before each mouse action;
+  // a point captured a few hundred milliseconds earlier is already stale.
+  const roster = await page.evaluate(() => window.__town__.robots.all().map((r) => ({ id: r.id, name: r.name })));
+  let street = null;
+  for (const r of roster) {
+    const at = await page.evaluate((id) => window.__town__.projectTownRobot(id), r.id);
+    if (!at || at.x < 40 || at.x > 1400 || at.y < 40 || at.y > 860) continue;
+    await page.mouse.move(at.x, at.y);
+    await page.waitForTimeout(120);
+    const tip = await page.evaluate(() => {
+      const node = document.getElementById('tooltip');
+      return node.classList.contains('visible') ? node.textContent : null;
+    });
+    if (tip === r.name) {
+      street = r;
+      break;
+    }
+  }
+  check('hovering a street robot names it', Boolean(street), `tried ${roster.length} robots`);
+  check(
+    'hovering a street robot offers the pointer',
+    (await page.evaluate(() => document.querySelector('#app canvas').style.cursor)) === 'pointer'
+  );
+
+  let picked = null;
+  for (let attempt = 0; attempt < 6 && street; attempt++) {
+    const at = await page.evaluate((id) => window.__town__.projectTownRobot(id), street.id);
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+    picked = await page.evaluate(() => window.__town__.townRobots.selected());
+    if (picked) break;
+  }
+  check('clicking a street robot selects it', picked === street?.id, `${picked} vs ${street?.id}`);
+  check(
+    'the selection draws one outline',
+    (await page.evaluate(
+      () => window.__town__.scene.getObjectByName('town-robots').children.filter((c) => c.isLineSegments).length
+    )) === 1
+  );
+  check('selecting a street robot stays in the town', (await page.evaluate(() => window.__town__.mode())) === 'town');
+  check(
+    'selecting a street robot opens no inspector',
+    (await page.evaluate(() => window.__town__.robots.panel())) === null
+  );
+
+  const core = await page.evaluate(() => window.__town__.projectBuilding('datacore'));
+  await page.mouse.move(core.x, core.y);
+  await page.waitForTimeout(200);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  if (await page.isVisible('#confirm-no')) await page.click('#confirm-no');
+  await page.waitForTimeout(500);
+  check('clicking a building still enters it', (await page.evaluate(() => window.__town__.mode())) === 'interior');
+  check(
+    'entering a building clears the street selection',
+    (await page.evaluate(() => window.__town__.townRobots.selected())) === null
+  );
+  await page.evaluate(() => window.__town__.interior.exit());
+  await page.waitForTimeout(300);
+  check('the town is back afterwards', (await page.evaluate(() => window.__town__.mode())) === 'town');
+  await page.screenshot({ path: 'shots/f-01b-town-robots.png' });
+
   await openMenu(page);
   check('gallery tab button exists', await page.isVisible('#tab-btn-gallery'));
   check('actions row shows expand counter', (await page.textContent('#btn-expand-map')) === 'EXPAND MAP (0/4)');
@@ -192,8 +326,11 @@ try {
     (await page.textContent('.robot-card[data-type="hauler"] .robot-card__cat')) === 'HAULER'
   );
   check('add buttons wait for a room', await page.isDisabled('.robot-card[data-type="unit"] [data-act="add"]'));
-  check('town roster shows the empty state', (await page.textContent('#robots-town')).includes('NO ROBOTS YET'));
-  check('town roster counts zero', (await page.textContent('#robots-count')) === '0 IN THE TOWN');
+  check('town roster lists the seeded fleet', !(await page.textContent('#robots-town')).includes('NO ROBOTS YET'));
+  check('town roster groups every built-in building', (await page.locator('#robots-town .robot-group').count()) === 12);
+  const townCount = parseInt(await page.textContent('#robots-count'), 10);
+  const storedCount = await page.evaluate(() => window.__town__.robots.all().length);
+  check('town roster counts the seeded fleet', townCount > 0 && townCount === storedCount, `${townCount} vs ${storedCount}`);
 
   await page.click('#tab-btn-settings');
   await page.click('#provider-add');

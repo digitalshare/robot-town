@@ -1,4 +1,4 @@
-import { MAX_EXPANSIONS, PLOT, gridForExpansion } from '../data/layout.js';
+import { BUILDINGS, MAX_EXPANSIONS, PLOT, gridForExpansion } from '../data/layout.js';
 import { validateSpec } from '../buildings/spec.js';
 import {
   validateSpaceSpec,
@@ -144,19 +144,31 @@ function idList(raw) {
   return Array.isArray(raw) ? raw.filter((v) => typeof v === 'string' && v) : [];
 }
 
-function robotName(raw, type, used) {
-  const text = String(raw ?? '').trim().slice(0, 40);
-  if (text) return text;
-  const prefix = typeForRobot(type).type.toUpperCase();
-  const taken = new Set(used);
-  let n = taken.size + 1;
-  while (taken.has(`${prefix}-${String(n).padStart(2, '0')}`)) n++;
-  return `${prefix}-${String(n).padStart(2, '0')}`;
+function takenRobotNames(robots, excludeId) {
+  return new Set(robots.filter((r) => r.id !== excludeId).map((r) => r.name));
 }
 
-function robotFields(value, used) {
-  const name = robotName(value.name, value.type, used);
-  used.push(name);
+// Lowest free <MODEL>-NN town-wide, so numbering keeps counting up and refills deleted gaps.
+function generatedRobotName(type, taken) {
+  const prefix = typeForRobot(type).type.toUpperCase();
+  let n = 0;
+  let name = '';
+  do {
+    n += 1;
+    name = `${prefix}-${String(n).padStart(2, '0')}`;
+  } while (taken.has(name));
+  return name;
+}
+
+function robotNameClash(name, taken) {
+  if (!name || !taken.has(name)) return null;
+  return `NAME '${name}' IS ALREADY USED BY ANOTHER ROBOT`;
+}
+
+// Lenient so older saves with duplicate names repair on load; addRobot/updateRobot reject clashes up front.
+function robotFields(value, taken) {
+  const name = value.name && !taken.has(value.name) ? value.name : generatedRobotName(value.type, taken);
+  taken.add(name);
   return {
     name,
     type: value.type,
@@ -168,12 +180,11 @@ function robotFields(value, used) {
   };
 }
 
-function rosterRobots(buildingId, count, room, origin, createdAt) {
-  const used = [];
+function rosterRobots(buildingId, count, room, origin, createdAt, taken) {
   return sampleRobotHomes(count, room).map((pos) => ({
     id: newId('rb'),
     buildingId,
-    ...robotFields(validateRobot({ type: 'unit', pos, rot: robotFacing(pos) }, room).value, used),
+    ...robotFields(validateRobot({ type: 'unit', pos, rot: robotFacing(pos) }, room).value, taken),
     origin,
     createdAt,
   }));
@@ -183,7 +194,7 @@ function normalizeRobots(rawRobots, town) {
   const out = [];
   const seen = new Set();
   const held = new Map();
-  const used = new Map();
+  const taken = new Set();
   const list = Array.isArray(rawRobots) ? rawRobots : [];
   for (let i = list.length - 1; i >= 0; i--) {
     const entry = list[i];
@@ -199,12 +210,11 @@ function normalizeRobots(rawRobots, town) {
     const count = held.get(record.id) ?? 0;
     if (count >= MAX_ROBOTS_PER_ROOM) continue;
     held.set(record.id, count + 1);
-    if (!used.has(record.id)) used.set(record.id, []);
     seen.add(id);
     out.unshift({
       id,
       buildingId: record.id,
-      ...robotFields(check.value, used.get(record.id)),
+      ...robotFields(check.value, taken),
       origin: entry.origin === 'default' || entry.origin === 'spec' ? entry.origin : 'user',
       createdAt: Number(entry.createdAt) || Date.now(),
     });
@@ -317,6 +327,22 @@ export function createTownStore(storage = globalThis.localStorage) {
     state.placements = state.placements.filter((p) => !dropped.includes(p.libraryId));
   }
 
+  // Marks the building seeded even when it places nothing, so a room whose
+  // roster was designed or cleared is never re-seeded behind the user's back.
+  // `taken` is shared across calls so names stay unique town-wide.
+  function seedRosterFor(record, taken) {
+    if (state.seededRobots.includes(record.id)) return 0;
+    const space = state.spaces.find((s) => s.buildingId === record.id);
+    const room = roomFor(record);
+    const owned = state.robots.some((r) => r.buildingId === record.id && r.origin !== 'user');
+    const count = owned ? 0 : space ? space.spec.robots : defaultRobots(room);
+    if (count) {
+      state.robots.push(...rosterRobots(record.id, count, room, space ? 'spec' : 'default', Date.now(), taken));
+    }
+    state.seededRobots.push(record.id);
+    return count;
+  }
+
   return {
     getState() {
       return state;
@@ -351,7 +377,8 @@ export function createTownStore(storage = globalThis.localStorage) {
       state.objects = state.objects.filter((o) => !(o.buildingId === record.id && o.origin === 'spec'));
       state.objects.push(...specObjects({ spec: check.value, buildingId: record.id, createdAt: Date.now() }));
       state.robots = state.robots.filter((r) => !(r.buildingId === record.id && r.origin !== 'user'));
-      state.robots.push(...rosterRobots(record.id, check.value.robots, roomFor(record), 'spec', Date.now()));
+      const taken = takenRobotNames(state.robots);
+      state.robots.push(...rosterRobots(record.id, check.value.robots, roomFor(record), 'spec', Date.now(), taken));
       if (!state.seededRobots.includes(record.id)) state.seededRobots.push(record.id);
       if (!state.adopted.includes(record.id)) state.adopted.push(record.id);
       commit('space');
@@ -460,14 +487,26 @@ export function createTownStore(storage = globalThis.localStorage) {
       const record = findBuildingRecord(state, buildingId);
       if (!record) return { ok: false, errors: ['NO SUCH BUILDING'] };
       if (state.seededRobots.includes(record.id)) return { ok: false, errors: ['ROSTER ALREADY SEEDED'] };
-      const space = state.spaces.find((s) => s.buildingId === record.id);
-      const room = roomFor(record);
-      const owned = state.robots.some((r) => r.buildingId === record.id && r.origin !== 'user');
-      const count = owned ? 0 : space ? space.spec.robots : defaultRobots(room);
-      if (count) state.robots.push(...rosterRobots(record.id, count, room, space ? 'spec' : 'default', Date.now()));
-      state.seededRobots.push(record.id);
-      if (count) commit('robot');
-      return { ok: true, placed: count };
+      const placed = seedRosterFor(record, takenRobotNames(state.robots));
+      if (placed) commit('robot');
+      return { ok: true, placed };
+    },
+    // Seed every building at once so the streets are alive on first load rather
+    // than only after the user walks into each room. One shared name set keeps
+    // names unique town-wide and one commit keeps subscribers from storming.
+    seedTownRobots() {
+      const taken = takenRobotNames(state.robots);
+      let placed = 0;
+      for (const b of BUILDINGS) {
+        const record = findBuildingRecord(state, b.id);
+        if (record) placed += seedRosterFor(record, taken);
+      }
+      for (const p of state.placements) {
+        const record = findBuildingRecord(state, p.libraryId);
+        if (record) placed += seedRosterFor(record, taken);
+      }
+      if (placed) commit('robot');
+      return { ok: true, placed };
     },
     addRobot(buildingId, draft = {}) {
       const record = findBuildingRecord(state, buildingId);
@@ -482,11 +521,14 @@ export function createTownStore(storage = globalThis.localStorage) {
       const rot = draft.rot === undefined ? robotFacing(pos) : draft.rot;
       const check = validateRobot({ ...draft, type, pos, rot }, room);
       if (!check.ok) return { ok: false, errors: check.errors };
+      const taken = takenRobotNames(state.robots);
+      const clash = robotNameClash(check.value.name, taken);
+      if (clash) return { ok: false, errors: [clash] };
       const id = newId('rb');
       state.robots.push({
         id,
         buildingId: record.id,
-        ...robotFields(check.value, siblings.map((r) => r.name)),
+        ...robotFields(check.value, taken),
         origin: 'user',
         createdAt: Date.now(),
       });
@@ -511,8 +553,10 @@ export function createTownStore(storage = globalThis.localStorage) {
         roomFor(record)
       );
       if (!check.ok) return { ok: false, errors: check.errors };
-      const used = state.robots.filter((r) => r.buildingId === entry.buildingId && r.id !== entry.id).map((r) => r.name);
-      Object.assign(entry, robotFields(check.value, used));
+      const taken = takenRobotNames(state.robots, entry.id);
+      const clash = robotNameClash(check.value.name, taken);
+      if (clash) return { ok: false, errors: [clash] };
+      Object.assign(entry, robotFields(check.value, taken));
       commit('robot');
       return { ok: true, id: entry.id };
     },

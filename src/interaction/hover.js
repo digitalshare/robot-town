@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 
-export function createHover(camera, dom, buildingsGroup, tooltip) {
+export function createHover(camera, dom, buildingsGroup, tooltip, pickRobot) {
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
   const hlCache = new Map();
   let event = null;
   let hovered = null;
+  let hoveredKind = null;
   let press = null;
   let clickFn = null;
 
@@ -21,6 +22,8 @@ export function createHover(camera, dom, buildingsGroup, tooltip) {
     return hl;
   }
 
+  // Only buildings glow: a robot is nine small meshes and lighting them all up
+  // reads as a flash, so it gets the tooltip and the pointer cursor instead.
   function setGroupMaterials(group, apply) {
     group.traverse((o) => {
       if (!o.isMesh) return;
@@ -33,39 +36,55 @@ export function createHover(camera, dom, buildingsGroup, tooltip) {
     });
   }
 
-  function setHovered(group) {
-    if (group === hovered) return;
-    if (hovered) setGroupMaterials(hovered, false);
-    hovered = group;
-    if (hovered) setGroupMaterials(hovered, true);
-    dom.style.cursor = hovered ? 'pointer' : 'default';
+  function setHovered(hit) {
+    const node = hit?.node ?? null;
+    if (node !== hovered) {
+      if (hoveredKind === 'building') setGroupMaterials(hovered, false);
+      hovered = node;
+      hoveredKind = hit?.kind ?? null;
+      if (hoveredKind === 'building') setGroupMaterials(hovered, true);
+    }
+    // Rewritten every frame on purpose: objectSelect clears the cursor on each
+    // pointermove, so writing it only on a change lets that reset stick.
+    dom.style.cursor = hovered ? 'pointer' : '';
     if (!hovered) tooltip.classList.remove('visible');
   }
 
-  function pickGroup(clientX, clientY) {
-    ndc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
-    raycaster.setFromCamera(ndc, camera);
+  function pickBuilding() {
     const hits = raycaster.intersectObjects(buildingsGroup.children, true);
     let o = hits[0]?.object ?? null;
     while (o && !o.userData.isBuilding) o = o.parent;
     return o;
   }
 
+  function pickAt(clientX, clientY) {
+    ndc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    // Buildings win ties. A robot standing in front of one would otherwise
+    // swallow the click that is supposed to walk you inside.
+    const group = pickBuilding();
+    if (group) return { kind: 'building', id: group.userData.id, name: group.userData.name, node: group };
+    return pickRobot ? pickRobot(raycaster) : null;
+  }
+
+  function place(clientX, clientY) {
+    const pad = 14;
+    let x = clientX + pad;
+    let y = clientY + pad;
+    const r = tooltip.getBoundingClientRect();
+    if (x + r.width > window.innerWidth - 8) x = clientX - r.width - pad;
+    if (y + r.height > window.innerHeight - 8) y = clientY - r.height - pad;
+    tooltip.style.left = `${x}px`;
+    tooltip.style.top = `${y}px`;
+  }
+
   function pick() {
-    const o = pickGroup(event.clientX, event.clientY);
-    setHovered(o);
-    if (o) {
-      tooltip.textContent = o.userData.name;
-      tooltip.classList.add('visible');
-      const pad = 14;
-      let x = event.clientX + pad;
-      let y = event.clientY + pad;
-      const r = tooltip.getBoundingClientRect();
-      if (x + r.width > window.innerWidth - 8) x = event.clientX - r.width - pad;
-      if (y + r.height > window.innerHeight - 8) y = event.clientY - r.height - pad;
-      tooltip.style.left = `${x}px`;
-      tooltip.style.top = `${y}px`;
-    }
+    const hit = pickAt(event.clientX, event.clientY);
+    setHovered(hit);
+    if (!hit) return;
+    tooltip.textContent = hit.name;
+    tooltip.classList.add('visible');
+    place(event.clientX, event.clientY);
   }
 
   dom.addEventListener('pointermove', (e) => {
@@ -83,7 +102,7 @@ export function createHover(camera, dom, buildingsGroup, tooltip) {
     const { x, y, t } = press;
     press = null;
     if (!clickFn || Math.hypot(e.clientX - x, e.clientY - y) > 6 || performance.now() - t > 400) return;
-    clickFn(pickGroup(e.clientX, e.clientY));
+    clickFn(pickAt(e.clientX, e.clientY));
   });
 
   return {
@@ -93,5 +112,6 @@ export function createHover(camera, dom, buildingsGroup, tooltip) {
     onClick(fn) {
       clickFn = fn;
     },
+    pickAt,
   };
 }

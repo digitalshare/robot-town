@@ -856,17 +856,44 @@ try {
   const movedTargets = await page.evaluate(() => window.__town__.interior.robotTargets());
   check('robots re-target around a second move', movedTargets.every((p) => clearOf(p, movedBox)), movedTargets);
 
+  // Re-targeting alone would pass for a robot that simply freezes in front of the
+  // rack, so also watch the room for a while: nobody may enter the obstacle, and
+  // every walker must actually get somewhere.
+  const watched = [];
+  for (let i = 0; i < 5; i++) {
+    watched.push(await page.evaluate(() => window.__town__.interior.robotPositions()));
+    if (i < 4) await page.waitForTimeout(400);
+  }
+  const trespass = watched.flat().filter((p) => !clearOf(p, movedBox));
+  check('robots never walk through the object', trespass.length === 0, trespass.slice(0, 4));
+  const frozen = watched[0]
+    .map((start, i) => ({ i, moved: watched.some((frame) => JSON.stringify(frame[i]) !== JSON.stringify(start)) }))
+    .filter((r) => !r.moved)
+    .map((r) => r.i);
+  check('robots bypass an object in their path instead of stalling', frozen.length === 0, `frozen indices ${frozen}`);
+
   // 8b. the ROBOTS tab manages every robot in the town
   const robotsAll = () => page.evaluate(() => window.__town__.robots.all());
+  // Every building is seeded at startup, so the town-wide list is far bigger than
+  // the room under test — and interior.robotPositions() is indexed by the room's
+  // own entity order, so any index into it must come from robotsIn('datacore').
+  const robotsIn = (buildingId) =>
+    page.evaluate((id) => window.__town__.robots.all().filter((r) => r.buildingId === id), buildingId);
   const baseRobots = (await robotsAll()).length;
-  check('the shell seeded a roster', baseRobots >= 2 && baseRobots <= 12, baseRobots);
+  const datacoreRobots = (await robotsIn('datacore')).length;
+  check('the shell seeded a roster', datacoreRobots >= 2 && datacoreRobots <= 12, datacoreRobots);
+  check(
+    'the town seeds a roster for every building',
+    baseRobots > datacoreRobots,
+    `${baseRobots} town-wide, ${datacoreRobots} in the data core`
+  );
   await openMenu(page);
   await page.click('#tab-btn-robots');
   await page.waitForTimeout(250);
   check('robots tab lists the three types', (await page.locator('.robot-card').count()) === 3);
   check(
     'robots tab groups the room roster',
-    (await page.locator('.robot-group[data-building="datacore"] .robot-row').count()) === baseRobots,
+    (await page.locator('.robot-group[data-building="datacore"] .robot-row').count()) === datacoreRobots,
     await page.locator('.robot-group[data-building="datacore"] .robot-row').count()
   );
   await page.click('.robot-card[data-type="hauler"] [data-act="add"]');
@@ -880,7 +907,7 @@ try {
     'the added robot carries the USER badge',
     (await page.textContent(`.robot-row[data-id="${hauler.id}"] .robot-row__badge`)) === 'USER'
   );
-  check('stats follow the roster', (await stats(page)).robots === baseRobots + 1, await stats(page));
+  check('stats follow the roster', (await stats(page)).robots === datacoreRobots + 1, await stats(page));
   check('ADD opens the robot panel', await page.isVisible('#robot-panel'));
   check('ADD leaves the object panel closed', !(await panelVisible(page)));
   check(
@@ -908,7 +935,12 @@ try {
   const idleBefore = await page.evaluate(() => window.__town__.interior.robotPositions());
   await page.waitForTimeout(900);
   const idleAfter = await page.evaluate(() => window.__town__.interior.robotPositions());
-  const haulerIndex = (await robotsAll()).findIndex((r) => r.id === hauler.id);
+  const haulerIndex = (await robotsIn('datacore')).findIndex((r) => r.id === hauler.id);
+  check(
+    'the added robot indexes the room roster',
+    haulerIndex >= 0 && haulerIndex < idleBefore.length,
+    `${haulerIndex} of ${idleBefore.length}`
+  );
   check(
     'an idle robot holds its home',
     JSON.stringify(idleBefore[haulerIndex]) === JSON.stringify(idleAfter[haulerIndex]),
@@ -924,10 +956,8 @@ try {
   await page.waitForTimeout(350);
   const movedHome = (await robotsAll()).find((r) => r.id === hauler.id);
   check('the home position persists', movedHome?.pos[0] === 5 && movedHome?.pos[1] === -5, movedHome?.pos);
-  check(
-    'the idle robot sits on its new home',
-    (await page.evaluate(() => window.__town__.interior.robotPositions()))[haulerIndex][0] === 5
-  );
+  const atNewHome = await page.evaluate(() => window.__town__.interior.robotPositions());
+  check('the idle robot sits on its new home', atNewHome[haulerIndex]?.[0] === 5, atNewHome[haulerIndex]);
   await page.fill('#robot-x', '99');
   await page.click('#robot-save');
   await page.waitForTimeout(250);
@@ -943,7 +973,7 @@ try {
 
   await page.click('.robot-card[data-type="sentinel"] [data-act="add"]');
   await page.waitForTimeout(400);
-  const sentinel = (await robotsAll()).find((r) => r.type === 'sentinel');
+  const sentinel = (await robotsIn('datacore')).find((r) => r.type === 'sentinel');
   check('a second robot can be added', Boolean(sentinel));
   await page.click('#robot-remove');
   await page.waitForTimeout(200);
@@ -993,7 +1023,7 @@ try {
     afterSpace.filter((o) => o.origin === 'spec').length === 5,
     afterSpace.map((o) => o.origin)
   );
-  const afterSpaceRobots = await robotsAll();
+  const afterSpaceRobots = await robotsIn('datacore');
   check(
     'the redesign replaces the roster with the spec family',
     afterSpaceRobots.filter((r) => r.origin === 'spec').length === 4 &&
