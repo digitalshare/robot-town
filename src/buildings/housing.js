@@ -35,6 +35,7 @@ function linkBridge(x1, z1, x2, z2, len) {
 
 function doorSlot(x, z) {
   const g = new THREE.Group();
+  g.userData.isDoor = true;
   g.add(box(1.6, 2.2, 0.24, MAT.dark, 0, 1.1, 0, false));
   g.add(box(2.3, 0.18, 1.0, MAT.wallWhite, 0, 2.4, 0.4, false));
   g.add(box(1.9, 0.14, 0.14, MAT.cyan, 0, 2.55, 0.12, false));

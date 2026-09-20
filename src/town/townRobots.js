@@ -70,13 +70,14 @@ function seedSpot(site, index) {
 // scenes that never render at once, so the same entity can be drawn in room-local
 // coordinates indoors and in global coordinates out here with no zone bookkeeping.
 // Neither view writes the live position back to the store.
-export function createTownRobots({ townStore, parent, getGrid }) {
+export function createTownRobots({ townStore, parent, buildings, getGrid }) {
   const root = new THREE.Group();
   root.name = 'town-robots';
   parent.add(root);
 
   const bots = new Map();
   const proxies = [];
+  const inside = new Map();
   const outlineOffset = new THREE.Vector3();
   let world = null;
   let grid = getGrid();
@@ -92,6 +93,7 @@ export function createTownRobots({ townStore, parent, getGrid }) {
 
   function rebuild() {
     clearSelect();
+    inside.clear();
     for (const bot of bots.values()) disposeGroup(bot.node);
     bots.clear();
     proxies.length = 0;
@@ -124,6 +126,26 @@ export function createTownRobots({ townStore, parent, getGrid }) {
     });
 
     const sites = buildingSites(state);
+    const doors = [];
+    for (const building of buildings?.children ?? []) {
+      if (!building.userData.isBuilding || !building.userData.id) continue;
+      let door = null;
+      building.traverse((node) => {
+        if (!door && node.userData.isDoor) door = node;
+      });
+      if (!door) continue;
+      const site = sites.get(building.userData.id);
+      if (!site) continue;
+      const halfX = site.footprint[0] / 2;
+      const halfZ = site.footprint[1] / 2;
+      const localX = door.position.x;
+      const localZ = door.position.z;
+      const onXFace = halfX - Math.abs(localX) <= halfZ - Math.abs(localZ);
+      const approach = onXFace
+        ? { x: site.x + (Math.sign(localX) || 1) * (halfX + BUILDING_PAD + RADIUS + 0.2), z: site.z + localZ }
+        : { x: site.x + localX, z: site.z + (Math.sign(localZ) || 1) * (halfZ + BUILDING_PAD + RADIUS + 0.2) };
+      doors.push({ buildingId: building.userData.id, ...approach });
+    }
     const roster = townStore.allRobots();
     if (roster.length > MAX_TOWN_ROBOTS && !warnedCap) {
       warnedCap = true;
@@ -143,7 +165,9 @@ export function createTownRobots({ townStore, parent, getGrid }) {
         x: home.x,
         z: home.z,
         r,
-        wander: entity.wander !== false,
+        // Town robots all use the street cycle; room-level wander settings do
+        // not prevent a unit from visiting a building entrance.
+        wander: true,
         home,
       });
 
@@ -177,6 +201,7 @@ export function createTownRobots({ townStore, parent, getGrid }) {
         insideFor: 0,
         visitIn: BUILDING_VISIT_INTERVAL[0] + rnd() * (BUILDING_VISIT_INTERVAL[1] - BUILDING_VISIT_INTERVAL[0]),
         random: rnd,
+        doors,
       });
     }
     root.updateMatrixWorld(true);
@@ -209,8 +234,14 @@ export function createTownRobots({ townStore, parent, getGrid }) {
       if (bot.node.visible && bot.phase === 'street' && bot.agent.wander) {
         bot.visitIn -= step;
         if (bot.visitIn <= 0) {
+          if (!bot.doors.length) {
+            bot.visitIn = BUILDING_VISIT_INTERVAL[0] + bot.random() * (BUILDING_VISIT_INTERVAL[1] - BUILDING_VISIT_INTERVAL[0]);
+            continue;
+          }
+          const door = bot.doors[Math.floor(bot.random() * bot.doors.length)];
+          bot.agent.door = door;
           bot.phase = 'to-building';
-          bot.agent.target = { ...bot.home };
+          bot.agent.target = { x: door.x, z: door.z };
           bot.agent.wait = 0;
         }
       }
@@ -226,6 +257,8 @@ export function createTownRobots({ townStore, parent, getGrid }) {
     for (const bot of bots.values()) {
       const { node, agent } = bot;
       if (!node.visible && bot.insideFor <= 0) {
+        const buildingId = agent.door?.buildingId;
+        if (buildingId) inside.get(buildingId)?.delete(bot.entity.id);
         node.visible = true;
         bot.phase = 'street';
         bot.agent.wait = 0;
@@ -236,6 +269,12 @@ export function createTownRobots({ townStore, parent, getGrid }) {
       if (node.visible && bot.phase === 'to-building' && agent.justArrived) {
         bot.phase = 'inside';
         bot.insideFor = BUILDING_STAY_RANGE[0] + bot.random() * (BUILDING_STAY_RANGE[1] - BUILDING_STAY_RANGE[0]);
+        const buildingId = agent.door?.buildingId;
+        if (buildingId) {
+          const occupants = inside.get(buildingId) ?? new Set();
+          occupants.add(bot.entity.id);
+          inside.set(buildingId, occupants);
+        }
         node.visible = false;
         if (outline && selectedId === bot.entity.id) outline.visible = false;
       }
@@ -277,6 +316,9 @@ export function createTownRobots({ townStore, parent, getGrid }) {
     },
     targets() {
       return [...bots.values()].map((b) => [round2(b.agent.target.x), round2(b.agent.target.z)]);
+    },
+    insideRobotIds(buildingId) {
+      return new Set(inside.get(buildingId) ?? []);
     },
     obstacles() {
       return world ? world.obstacles.list().map((b) => ({ ...b })) : [];

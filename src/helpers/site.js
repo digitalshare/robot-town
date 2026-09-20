@@ -42,6 +42,7 @@ export function hedgeRow(len, x = 0, z = 0, rotY = 0) {
 
 export function door(w = 2.2, h = 2.6, z = 0) {
   const g = new THREE.Group();
+  g.userData.isDoor = true;
   g.add(box(w, h, 0.24, MAT.dark, 0, PAD_H + h / 2, z, false));
   g.add(box(w + 0.9, 0.18, 1.1, MAT.wallWhite, 0, PAD_H + h + 0.12, z + 0.45, false));
   g.add(box(w + 0.4, 0.14, 0.14, MAT.cyan, 0, PAD_H + h + 0.28, z + 0.12, false));

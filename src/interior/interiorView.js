@@ -123,7 +123,7 @@ function buildShell(room, theme) {
   return g;
 }
 
-export function createInteriorView({ townStore, dom }) {
+export function createInteriorView({ townStore, dom, getRobotOccupants = null }) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xe9eef1);
 
@@ -154,6 +154,7 @@ export function createInteriorView({ townStore, dom }) {
   const objectNodes = new Map();
   let robotsRoot = null;
   const robotNodes = new Map();
+  let robotOccupantKey = null;
   let selectedId = null;
   let selectedRobotId = null;
   let firstPerson = false;
@@ -199,6 +200,7 @@ export function createInteriorView({ townStore, dom }) {
     objectNodes.clear();
     robotsRoot = null;
     robotNodes.clear();
+    robotOccupantKey = null;
     selectedId = null;
     selectedRobotId = null;
     firstPerson = false;
@@ -218,11 +220,14 @@ export function createInteriorView({ townStore, dom }) {
   }
 
   function addRobotNodes() {
+    const occupants = getRobotOccupants?.(record.id);
+    const entities = townStore.getRobots(record.id).filter((entity) => !occupants || occupants.has(entity.id));
+    robotOccupantKey = occupants ? [...occupants].sort().join('|') : null;
     robots = createRobots({
       group: robotsRoot,
       room,
       obstacles: obstacleRects(),
-      entities: townStore.getRobots(record.id),
+      entities,
     });
     for (const node of robotsRoot.children) robotNodes.set(node.userData.robotId, node);
   }
@@ -459,6 +464,9 @@ export function createInteriorView({ townStore, dom }) {
       return robots ? robots.targets() : [];
     },
     update(dt) {
+      const occupants = getRobotOccupants?.(record?.id);
+      const nextKey = occupants ? [...occupants].sort().join('|') : null;
+      if (nextKey !== robotOccupantKey) refreshRobots();
       robots?.update(dt);
       const node = selectedRobotId ? robotNodes.get(selectedRobotId) : null;
       if (node && outline) outline.position.copy(node.position).add(outlineOffset);

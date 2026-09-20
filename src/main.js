@@ -45,7 +45,7 @@ scene.add(manager.town);
 // Sits beside the manager's base and building groups on purpose: base is
 // disposed on every map expansion, and buildingsGroup is raycast recursively by
 // the hover picker, where a robot hit would mask the building behind it.
-const townRobots = createTownRobots({ townStore, parent: manager.town, getGrid: () => manager.getGrid() });
+const townRobots = createTownRobots({ townStore, parent: manager.town, buildings: buildingsGroup, getGrid: () => manager.getGrid() });
 frameSun(sun, manager.getGrid().bounds);
 
 const sectorChip = document.getElementById('sector-chip');
@@ -55,7 +55,11 @@ sectorChip.textContent = SECTOR.label;
 mapChip.textContent = mapChipLabel(townStore.getState().expansions);
 
 const hover = createHover(camera, renderer.domElement, buildingsGroup, tooltip, townRobots.pickRobot);
-const interior = createInteriorView({ townStore, dom: renderer.domElement });
+const interior = createInteriorView({
+  townStore,
+  dom: renderer.domElement,
+  getRobotOccupants: (buildingId) => townRobots.insideRobotIds(buildingId),
+});
 
 const aiStore = createAiStore();
 const confirmBar = createConfirmBar();
@@ -515,16 +519,15 @@ window.__town__ = {
 const clock = new THREE.Clock();
 let ready = false;
 renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  townRobots.update(dt);
   if (interior.isActive()) {
-    const dt = clock.getDelta();
     interior.update(dt);
     if (activeRobotView?.scene === 'interior') {
       if (!updateRobotCamera(interior.robotNodeFor(activeRobotView.id))) exitRobotView();
       renderer.render(interior.scene, robotCamera);
     } else renderer.render(interior.scene, interior.camera);
   } else {
-    const dt = clock.getDelta();
-    townRobots.update(dt);
     if (activeRobotView?.scene === 'town') {
       if (!updateRobotCamera(townRobots.nodeFor(activeRobotView.id))) exitRobotView();
       renderer.render(scene, robotCamera);
