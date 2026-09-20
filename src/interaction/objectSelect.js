@@ -20,7 +20,7 @@ export function createObjectSelect({ camera, dom, controls, interiorView, onSele
   }
 
   function pickAt(clientX, clientY) {
-    if (!interiorView.isActive()) return null;
+    if (!interiorView.isActive() || interiorView.isFirstPerson?.()) return null;
     cast(clientX, clientY);
     for (const hit of raycaster.intersectObjects([...interiorView.objectRoot().children], true)) {
       let node = hit.object;
@@ -47,7 +47,7 @@ export function createObjectSelect({ camera, dom, controls, interiorView, onSele
   }
 
   dom.addEventListener('pointerdown', (e) => {
-    if (!interiorView.isActive() || e.button !== 0) return;
+    if (!interiorView.isActive() || interiorView.isFirstPerson?.() || e.button !== 0) return;
     press = { x: e.clientX, y: e.clientY, t: performance.now(), id: null, grabbed: false, moved: false, last: null, offset: { x: 0, z: 0 } };
     const hit = pickAt(e.clientX, e.clientY);
     if (hit?.kind !== 'object') return;

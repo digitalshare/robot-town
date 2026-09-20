@@ -383,6 +383,7 @@ export function createAvoidance(opts = {}) {
       vx: 0,
       vz: 0,
       moving: false,
+      justArrived: false,
       wait: 0,
       stuckFor: 0,
       lastX: 0,
@@ -440,6 +441,19 @@ export function createAvoidance(opts = {}) {
       if (dx * dx + dz * dz < reach * reach) return true;
     }
     return false;
+  }
+
+  // Checking only the destination lets a fast frame jump from one side of a
+  // thin obstacle to the other. Sample the swept path so the body stops before
+  // contact and can use the slide fallback below instead.
+  function canTraverse(a, dx, dz) {
+    const distance = Math.hypot(dx, dz);
+    const steps = Math.max(1, Math.ceil(distance / Math.max(0.08, a.r * 0.35)));
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      if (blocked(a, a.x + dx * t, a.z + dz * t)) return false;
+    }
+    return true;
   }
 
   // Last-resort guarantee: walk each agent out of whatever it ended the frame
@@ -500,6 +514,7 @@ export function createAvoidance(opts = {}) {
 
     for (const a of agents) {
       a.moving = false;
+      a.justArrived = false;
       if (!a.wander) {
         a.x = a.home.x;
         a.z = a.home.z;
@@ -521,6 +536,7 @@ export function createAvoidance(opts = {}) {
       let dz = a.target.z - a.z;
       const dist = Math.hypot(dx, dz);
       if (dist < arrive) {
+        a.justArrived = true;
         a.wait = waitMin + rng() * waitSpan;
         a.vx = 0;
         a.vz = 0;
@@ -598,12 +614,12 @@ export function createAvoidance(opts = {}) {
       const stepX = vx * h;
       const stepZ = vz * h;
       // Slide along whatever stopped us rather than freezing against it.
-      if (!blocked(a, a.x + stepX, a.z + stepZ)) {
+      if (canTraverse(a, stepX, stepZ)) {
         a.x += stepX;
         a.z += stepZ;
-      } else if (!blocked(a, a.x + stepX, a.z)) {
+      } else if (canTraverse(a, stepX, 0)) {
         a.x += stepX;
-      } else if (!blocked(a, a.x, a.z + stepZ)) {
+      } else if (canTraverse(a, 0, stepZ)) {
         a.z += stepZ;
       }
 

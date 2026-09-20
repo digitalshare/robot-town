@@ -30,6 +30,10 @@ const { sun } = setupEnvironment(scene, renderer);
 
 const camera = createCamera();
 const controls = createControls(camera, renderer.domElement);
+const robotCamera = new THREE.PerspectiveCamera(74, window.innerWidth / Math.max(1, window.innerHeight), 0.05, 500);
+const robotPov = document.getElementById('robot-pov');
+const robotPovName = document.getElementById('robot-pov-name');
+const robotPovExit = document.getElementById('robot-pov-exit');
 
 const buildingsGroup = new THREE.Group();
 const townStore = createTownStore();
@@ -90,7 +94,12 @@ const objectPanel = createObjectPanel({
   interiorView: interior,
   onReference: (entry, record) => menu.openObjectTool(record, entry),
 });
-const robotPanel = createRobotPanel({ townStore, interiorView: interior });
+const robotPanel = createRobotPanel({
+  townStore,
+  interiorView: interior,
+  onFirstPerson: enterRobotView,
+  onClose: () => townRobots.clearSelect(),
+});
 const objectSelect = createObjectSelect({
   camera: interior.camera,
   dom: renderer.domElement,
@@ -128,6 +137,7 @@ hover.onClick((hit) => {
   if (interior.isActive() || siteSelect.isActive() || menu.isOpen()) return;
   if (hit?.kind === 'robot') {
     townRobots.select(hit.id);
+    showRobot(hit.id);
     return;
   }
   townRobots.clearSelect();
@@ -182,7 +192,8 @@ function showRobot(id) {
     return;
   }
   objectPanel.hide();
-  interior.selectRobot(entry.id);
+  if (interior.isActive()) interior.selectRobot(entry.id);
+  else townRobots.select(entry.id);
   robotPanel.show({ entry, record, room: roomFor(record) });
 }
 
@@ -217,6 +228,7 @@ function syncRobotPanel() {
 
 function exitInterior() {
   if (!interior.isActive()) return;
+  if (activeRobotView?.scene === 'interior') exitRobotView();
   interior.exit();
   controls.enabled = true;
   interiorBar.hide();
@@ -227,6 +239,51 @@ function exitInterior() {
   menu.objectsTab.refresh();
   menu.robotsTab.refresh();
 }
+
+let activeRobotView = null;
+
+function updateRobotCamera(node) {
+  if (!node) return false;
+  node.updateWorldMatrix(true, true);
+  const bounds = new THREE.Box3().setFromObject(node);
+  const origin = node.getWorldPosition(new THREE.Vector3());
+  const height = Math.max(1, bounds.max.y - bounds.min.y);
+  const eye = new THREE.Vector3(origin.x, bounds.min.y + height * 0.78, origin.z);
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion()));
+  robotCamera.position.copy(eye);
+  robotCamera.lookAt(eye.x + forward.x, eye.y + forward.y * 0.05, eye.z + forward.z);
+  return true;
+}
+
+function enterRobotView(target) {
+  const id = target?.entry?.id;
+  if (!id) return;
+  const inInterior = interior.isActive();
+  const node = inInterior ? interior.robotNodeFor(id) : townRobots.nodeFor(id);
+  if (!node) return;
+  activeRobotView = { id, scene: inInterior ? 'interior' : 'town' };
+  if (inInterior) interior.setFirstPerson(true);
+  else controls.enabled = false;
+  robotPovName.textContent = target.entry.name;
+  robotPov.hidden = false;
+  updateRobotCamera(node);
+}
+
+function exitRobotView() {
+  if (!activeRobotView) return;
+  const view = activeRobotView;
+  activeRobotView = null;
+  if (view.scene === 'interior') {
+    interior.setFirstPerson(false);
+    interior.selectRobot(view.id);
+  } else {
+    controls.enabled = true;
+    townRobots.select(view.id);
+  }
+  robotPov.hidden = true;
+}
+
+robotPovExit.addEventListener('click', exitRobotView);
 
 function locate(x, z) {
   const dx = x - controls.target.x;
@@ -276,12 +333,26 @@ window.addEventListener('resize', () => {
   resizeCamera(camera);
   interior.resize();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  robotCamera.aspect = window.innerWidth / Math.max(1, window.innerHeight);
+  robotCamera.updateProjectionMatrix();
 });
 
 window.addEventListener(
   'keydown',
   (e) => {
-    if (e.key !== 'Escape' || !interior.isActive()) return;
+    if (e.key === 'Escape' && activeRobotView) {
+      exitRobotView();
+      e.stopPropagation();
+      return;
+    }
+    if (e.key !== 'Escape') return;
+    if (!interior.isActive()) {
+      if (!robotPanel.isVisible()) return;
+      townRobots.clearSelect();
+      robotPanel.hide();
+      e.stopPropagation();
+      return;
+    }
     if (robotPanel.isVisible()) {
       interior.selectRobot(null);
       robotPanel.hide();
@@ -328,7 +399,12 @@ window.__town__ = {
   siteSelect,
   confirmBar,
   interiorBar,
+  robotCamera,
   mode: () => (interior.isActive() ? 'interior' : 'town'),
+  robotView: {
+    active: () => Boolean(activeRobotView),
+    exit: exitRobotView,
+  },
   enterBuilding: (id) => interiorFlow.handleBuildingClick(id),
   interior: {
     isActive: () => interior.isActive(),
@@ -440,14 +516,23 @@ const clock = new THREE.Clock();
 let ready = false;
 renderer.setAnimationLoop(() => {
   if (interior.isActive()) {
-    interior.update(clock.getDelta());
-    renderer.render(interior.scene, interior.camera);
+    const dt = clock.getDelta();
+    interior.update(dt);
+    if (activeRobotView?.scene === 'interior') {
+      if (!updateRobotCamera(interior.robotNodeFor(activeRobotView.id))) exitRobotView();
+      renderer.render(interior.scene, robotCamera);
+    } else renderer.render(interior.scene, interior.camera);
   } else {
     const dt = clock.getDelta();
-    controls.update();
     townRobots.update(dt);
-    hover.update();
-    renderer.render(scene, camera);
+    if (activeRobotView?.scene === 'town') {
+      if (!updateRobotCamera(townRobots.nodeFor(activeRobotView.id))) exitRobotView();
+      renderer.render(scene, robotCamera);
+    } else {
+      controls.update();
+      hover.update();
+      renderer.render(scene, camera);
+    }
   }
   if (!ready) {
     ready = true;

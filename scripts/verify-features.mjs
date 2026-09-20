@@ -261,10 +261,13 @@ try {
     )) === 1
   );
   check('selecting a street robot stays in the town', (await page.evaluate(() => window.__town__.mode())) === 'town');
-  check(
-    'selecting a street robot opens no inspector',
-    (await page.evaluate(() => window.__town__.robots.panel())) === null
-  );
+  check('selecting a street robot opens its inspector', (await page.evaluate(() => window.__town__.robots.panel()))?.entry?.id === street?.id);
+  await page.click('#robot-first-person');
+  await page.waitForTimeout(150);
+  check('town robot opens first-person view', await page.evaluate(() => window.__town__.robotView.active()));
+  check('first-person HUD names the town robot', (await page.textContent('#robot-pov-name')) === street?.name);
+  await page.click('#robot-pov-exit');
+  check('town first-person view exits cleanly', !(await page.evaluate(() => window.__town__.robotView.active())));
 
   const core = await page.evaluate(() => window.__town__.projectBuilding('datacore'));
   await page.mouse.move(core.x, core.y);

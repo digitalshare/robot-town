@@ -156,6 +156,7 @@ export function createInteriorView({ townStore, dom }) {
   const robotNodes = new Map();
   let selectedId = null;
   let selectedRobotId = null;
+  let firstPerson = false;
   let outline = null;
   const outlineOffset = new THREE.Vector3();
 
@@ -200,6 +201,7 @@ export function createInteriorView({ townStore, dom }) {
     robotNodes.clear();
     selectedId = null;
     selectedRobotId = null;
+    firstPerson = false;
     robots = null;
     counts = { fixtures: 0, props: 0, objects: 0 };
   }
@@ -406,6 +408,13 @@ export function createInteriorView({ townStore, dom }) {
     selectRobot,
     selectedRobotId() {
       return selectedRobotId;
+    },
+    setFirstPerson(active) {
+      firstPerson = Boolean(active);
+      controls.enabled = !firstPerson && Boolean(record);
+    },
+    isFirstPerson() {
+      return firstPerson;
     },
     objectIds() {
       return [...objectNodes.keys()];

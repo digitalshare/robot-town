@@ -27,6 +27,8 @@ const TREE_PAD = 0.3;
 const PAD_OBSTACLE = 3.2;
 const PAD_PAD = 0.5;
 const SEED_CLEARANCE = 1.85; // 0.35 grass-pad apron + 1.5 of walking room
+const BUILDING_STAY_RANGE = [2.5, 6];
+const BUILDING_VISIT_INTERVAL = [4, 12];
 
 const round2 = (v) => Math.round(v * 100) / 100;
 const asRect = (b) => ({
@@ -93,6 +95,7 @@ export function createTownRobots({ townStore, parent, getGrid }) {
     for (const bot of bots.values()) disposeGroup(bot.node);
     bots.clear();
     proxies.length = 0;
+    const rnd = Math.random;
 
     grid = getGrid();
     const state = townStore.getState();
@@ -165,7 +168,16 @@ export function createTownRobots({ townStore, parent, getGrid }) {
       node.position.set(agent.x, surfaceY(grid, agent.x, agent.z), agent.z);
       root.add(node);
       proxies.push(proxy);
-      bots.set(entity.id, { node, agent, entity });
+      bots.set(entity.id, {
+        node,
+        agent,
+        entity,
+        home,
+        phase: 'street',
+        insideFor: 0,
+        visitIn: BUILDING_VISIT_INTERVAL[0] + rnd() * (BUILDING_VISIT_INTERVAL[1] - BUILDING_VISIT_INTERVAL[0]),
+        random: rnd,
+      });
     }
     root.updateMatrixWorld(true);
   }
@@ -193,11 +205,40 @@ export function createTownRobots({ townStore, parent, getGrid }) {
   function update(dt) {
     if (!world || !bots.size) return;
     const step = Number.isFinite(dt) ? Math.min(dt, MAX_STEP) : 0;
+    for (const bot of bots.values()) {
+      if (bot.node.visible && bot.phase === 'street' && bot.agent.wander) {
+        bot.visitIn -= step;
+        if (bot.visitIn <= 0) {
+          bot.phase = 'to-building';
+          bot.agent.target = { ...bot.home };
+          bot.agent.wait = 0;
+        }
+      }
+      if (!bot.node.visible) {
+        bot.insideFor -= step;
+        // Keep the agent parked while its robot is inside the building.
+        bot.agent.wait = 1;
+      }
+    }
     world.step(step, { waitRange: WAIT_RANGE });
     // Stepping off a slab onto asphalt is a 0.19 drop; easing it avoids a pop.
     const ease = Math.min(1, step * SURFACE_LERP);
     for (const bot of bots.values()) {
       const { node, agent } = bot;
+      if (!node.visible && bot.insideFor <= 0) {
+        node.visible = true;
+        bot.phase = 'street';
+        bot.agent.wait = 0;
+        bot.visitIn = BUILDING_VISIT_INTERVAL[0] + bot.random() * (BUILDING_VISIT_INTERVAL[1] - BUILDING_VISIT_INTERVAL[0]);
+        bot.agent.target = world.sampleTarget(bot.agent, { minDist: MIN_TARGET_DIST, r: bot.agent.r });
+        if (outline && selectedId === bot.entity.id) outline.visible = true;
+      }
+      if (node.visible && bot.phase === 'to-building' && agent.justArrived) {
+        bot.phase = 'inside';
+        bot.insideFor = BUILDING_STAY_RANGE[0] + bot.random() * (BUILDING_STAY_RANGE[1] - BUILDING_STAY_RANGE[0]);
+        node.visible = false;
+        if (outline && selectedId === bot.entity.id) outline.visible = false;
+      }
       node.position.x = agent.x;
       node.position.z = agent.z;
       node.position.y += (surfaceY(grid, agent.x, agent.z) - node.position.y) * ease;

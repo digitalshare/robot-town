@@ -155,6 +155,42 @@ body {
   display: none;
 }
 
+.robot-pov {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(8, 18, 24, 0.86);
+  border: 1px solid var(--hud-cyan);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.robot-pov[hidden] {
+  display: none;
+}
+
+.robot-pov__label,
+.robot-pov__name {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 10px;
+}
+
+.robot-pov__label {
+  color: var(--hud-cyan);
+}
+
+.robot-pov__name {
+  color: var(--hud-text);
+  font-weight: 600;
+}
+
 .interior-bar__name {
   color: var(--hud-text);
   text-transform: uppercase;

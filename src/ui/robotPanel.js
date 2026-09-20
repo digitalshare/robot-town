@@ -3,7 +3,7 @@ import { MAT } from '../materials/palette.js';
 import { ACCENTS, typeForRobot, MIN_ROBOT_SCALE, MAX_ROBOT_SCALE } from '../interior/robotTypes.js';
 import { robotLimits } from '../interior/spaceSpec.js';
 
-export function createRobotPanel({ townStore, interiorView, host = document.body } = {}) {
+export function createRobotPanel({ townStore, interiorView, onFirstPerson, onClose, host = document.body } = {}) {
   let current = null;
   let draft = null;
   let pendingRemove = false;
@@ -82,6 +82,7 @@ export function createRobotPanel({ townStore, interiorView, host = document.body
   const rotValue = el('span', { id: 'robot-rot-value', className: 'object-field__value', text: '0°' });
 
   const save = el('button', { id: 'robot-save', className: 'btn btn--primary', text: 'SAVE' });
+  const firstPerson = el('button', { id: 'robot-first-person', className: 'btn', text: 'FIRST PERSON' });
   const remove = el('button', { id: 'robot-remove', className: 'btn', text: 'DELETE' });
 
   const panel = el(
@@ -124,7 +125,7 @@ export function createRobotPanel({ townStore, interiorView, host = document.body
       )
     ),
     error,
-    el('div', { className: 'robot-panel__actions' }, save, remove)
+    el('div', { className: 'robot-panel__actions' }, firstPerson, save, remove)
   );
   host.appendChild(panel);
 
@@ -224,8 +225,13 @@ export function createRobotPanel({ townStore, interiorView, host = document.body
     townStore.removeRobot(current.entry.id);
   });
 
+  firstPerson.addEventListener('click', () => {
+    if (current) onFirstPerson?.(current);
+  });
+
   close.addEventListener('click', () => {
     interiorView.selectRobot(null);
+    onClose?.();
     hide();
   });
 
