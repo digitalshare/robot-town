@@ -9,6 +9,8 @@ const ARRIVE = 0.18;
 const WAIT_RANGE = [0.4, 1.2];
 const MIN_TARGET_DIST = 2;
 const MAX_STEP = 0.05;
+const HEADING_RESPONSE = 7;
+const HEADING_DEADBAND = 0.25;
 
 function seedOf(count) {
   let s = (count * 2654435761) >>> 0 || 7;
@@ -68,7 +70,12 @@ export function createRobots({ group, room, obstacles = [], entities = [] }) {
         b.t += step;
         node.position.x = agent.x;
         node.position.z = agent.z;
-        if (agent.moving) node.rotation.y = Math.atan2(agent.vx, agent.vz);
+        if (agent.moving && Math.hypot(agent.vx, agent.vz) > HEADING_DEADBAND) {
+          const target = Math.atan2(agent.vx, agent.vz);
+          let delta = target - node.rotation.y;
+          delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+          node.rotation.y += delta * (1 - Math.exp(-HEADING_RESPONSE * step));
+        }
         node.position.y = agent.moving
           ? Math.abs(Math.sin(b.t * 6 + b.phase)) * 0.05
           : Math.abs(Math.sin(b.t * 2 + b.phase)) * 0.02;

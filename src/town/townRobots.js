@@ -17,6 +17,8 @@ const BOUND_INSET = 2;
 const CELL = 4;
 const MAX_STEP = 0.05;
 const SURFACE_LERP = 10;
+const HEADING_RESPONSE = 7;
+const HEADING_DEADBAND = 0.25;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const TYPE_HEIGHT = { unit: 1.9, hauler: 1.6, sentinel: 2.5 };
 
@@ -301,7 +303,12 @@ export function createTownRobots({ townStore, parent, buildings, getGrid, onBuil
       node.position.x = agent.x;
       node.position.z = agent.z;
       node.position.y += (surfaceY(grid, agent.x, agent.z) - node.position.y) * ease;
-      if (agent.moving) node.rotation.y = Math.atan2(agent.vx, agent.vz);
+      if (agent.moving && Math.hypot(agent.vx, agent.vz) > HEADING_DEADBAND) {
+        const target = Math.atan2(agent.vx, agent.vz);
+        let delta = target - node.rotation.y;
+        delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+        node.rotation.y += delta * (1 - Math.exp(-HEADING_RESPONSE * step));
+      }
     }
     if (outline && selectedId) {
       const bot = bots.get(selectedId);

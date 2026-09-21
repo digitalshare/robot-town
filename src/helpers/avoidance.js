@@ -15,6 +15,7 @@ const STUCK_DIST = 0.06; // less than this per window counts as trapped
 const CELL = 4; // broad-phase cell edge, ~2x the largest interaction range
 const MAX_STEP = 0.05;
 const PEAK_SPEED = 1.35; // avoidance may exceed cruise speed by this much
+const STEER_RESPONSE = 11; // velocity follows new steering without frame-to-frame snaps
 const RELAX_PASSES = 8; // capped; relax exits on the first settled pass
 const SCAN_DIVISIONS = 48;
 const EPS = 1e-6;
@@ -382,6 +383,8 @@ export function createAvoidance(opts = {}) {
       z: wander && Number.isFinite(Number(spec.z)) ? Number(spec.z) : home.z,
       vx: 0,
       vz: 0,
+      steerVx: 0,
+      steerVz: 0,
       moving: false,
       justArrived: false,
       wait: 0,
@@ -520,12 +523,16 @@ export function createAvoidance(opts = {}) {
         a.z = a.home.z;
         a.vx = 0;
         a.vz = 0;
+        a.steerVx = 0;
+        a.steerVz = 0;
         continue;
       }
       if (a.wait > 0) {
         a.wait -= h;
         a.vx = 0;
         a.vz = 0;
+        a.steerVx = 0;
+        a.steerVz = 0;
         if (a.wait > 0) continue;
       }
 
@@ -611,8 +618,15 @@ export function createAvoidance(opts = {}) {
         vz = (vz / vlen) * peak;
       }
 
-      const stepX = vx * h;
-      const stepZ = vz * h;
+      // Keep the steering direction continuous. The swept collision test below
+      // remains the hard safety boundary, so smoothing cannot trade clearance
+      // for comfort when a new obstacle appears.
+      const steerAlpha = 1 - Math.exp(-STEER_RESPONSE * h);
+      a.steerVx += (vx - a.steerVx) * steerAlpha;
+      a.steerVz += (vz - a.steerVz) * steerAlpha;
+
+      const stepX = a.steerVx * h;
+      const stepZ = a.steerVz * h;
       // Slide along whatever stopped us rather than freezing against it.
       if (canTraverse(a, stepX, stepZ)) {
         a.x += stepX;
@@ -621,6 +635,10 @@ export function createAvoidance(opts = {}) {
         a.x += stepX;
       } else if (canTraverse(a, 0, stepZ)) {
         a.z += stepZ;
+      } else {
+        // Do not carry a stale command into the obstacle on the next frame.
+        a.steerVx *= 0.35;
+        a.steerVz *= 0.35;
       }
 
       const out = obstacles.pushOut(a.x, a.z, a.r);

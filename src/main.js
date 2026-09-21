@@ -31,6 +31,12 @@ const { sun } = setupEnvironment(scene, renderer);
 const camera = createCamera();
 const controls = createControls(camera, renderer.domElement);
 const robotCamera = new THREE.PerspectiveCamera(74, window.innerWidth / Math.max(1, window.innerHeight), 0.05, 500);
+const robotCameraPose = {
+  node: null,
+  position: new THREE.Vector3(),
+  lookAt: new THREE.Vector3(),
+  initialized: false,
+};
 const robotPov = document.getElementById('robot-pov');
 const robotPovName = document.getElementById('robot-pov-name');
 const robotPovExit = document.getElementById('robot-pov-exit');
@@ -303,7 +309,7 @@ function setRobotHeading(node, heading) {
   node.rotation.y = Math.atan2(heading.x, heading.z);
 }
 
-function updateRobotCamera(node) {
+function updateRobotCamera(node, dt = 1 / 60) {
   if (!node) return false;
   node.updateWorldMatrix(true, true);
   const bounds = new THREE.Box3().setFromObject(node);
@@ -311,8 +317,20 @@ function updateRobotCamera(node) {
   const height = Math.max(1, bounds.max.y - bounds.min.y);
   const eye = new THREE.Vector3(origin.x, bounds.min.y + height * 0.78, origin.z);
   const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion()));
-  robotCamera.position.copy(eye);
-  robotCamera.lookAt(eye.x + forward.x, eye.y + forward.y * 0.05, eye.z + forward.z);
+  const target = new THREE.Vector3(eye.x + forward.x, eye.y + forward.y * 0.05, eye.z + forward.z);
+  if (!robotCameraPose.initialized || robotCameraPose.node !== node) {
+    robotCameraPose.node = node;
+    robotCameraPose.position.copy(eye);
+    robotCameraPose.lookAt.copy(target);
+    robotCameraPose.initialized = true;
+  } else {
+    const positionAlpha = 1 - Math.exp(-12 * Math.max(0, dt));
+    const headingAlpha = 1 - Math.exp(-16 * Math.max(0, dt));
+    robotCameraPose.position.lerp(eye, positionAlpha);
+    robotCameraPose.lookAt.lerp(target, headingAlpha);
+  }
+  robotCamera.position.copy(robotCameraPose.position);
+  robotCamera.lookAt(robotCameraPose.lookAt);
   return true;
 }
 
@@ -831,12 +849,12 @@ renderer.setAnimationLoop(() => {
   if (interior.isActive()) {
     interior.update(dt);
     if (activeRobotView?.scene === 'interior') {
-      if (!updateRobotCamera(interior.robotNodeFor(activeRobotView.id))) exitRobotView();
+      if (!updateRobotCamera(interior.robotNodeFor(activeRobotView.id), dt)) exitRobotView();
       renderer.render(interior.scene, robotCamera);
     } else renderer.render(interior.scene, interior.camera);
   } else {
     if (activeRobotView?.scene === 'town') {
-      if (!updateRobotCamera(townRobots.nodeFor(activeRobotView.id))) exitRobotView();
+      if (!updateRobotCamera(townRobots.nodeFor(activeRobotView.id), dt)) exitRobotView();
       renderer.render(scene, robotCamera);
     } else {
       controls.update();
