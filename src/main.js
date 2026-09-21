@@ -71,7 +71,12 @@ const hover = createHover(camera, renderer.domElement, buildingsGroup, tooltip, 
 const interior = createInteriorView({
   townStore,
   dom: renderer.domElement,
-  getRobotOccupants: (buildingId) => townRobots.insideRobotIds(buildingId),
+  getRobotOccupants: (buildingId) => {
+    const occupants = townRobots.insideRobotIds(buildingId);
+    const active = activeRobotView && townStore.getRobot(activeRobotView.id);
+    if (activeRobotView?.scene === 'town' && active?.buildingId === buildingId) occupants.add(active.id);
+    return occupants;
+  },
 });
 
 const aiStore = createAiStore();
