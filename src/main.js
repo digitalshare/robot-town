@@ -177,7 +177,7 @@ function enterInterior(record, { preserveRobotId = null } = {}) {
   townRobots.clearSelect();
   ensureDefaults(record);
   if (preserveRobotId) townRobots.select(preserveRobotId);
-  interior.enter(record);
+  interior.enter(record, { robotId: preserveRobotId });
   controls.enabled = false;
   tooltip.classList.remove('visible');
   sectorChip.hidden = true;
@@ -270,11 +270,13 @@ function handleRobotBuildingTransition({ id, buildingId, direction }) {
     if (!record) return;
     const heading = robotHeading(townRobots.nodeFor(id));
     enterInterior(record, { preserveRobotId: id });
+    const node = interior.robotNodeFor(id);
+    if (!node) return;
     interior.selectRobot(id);
-    setRobotHeading(interior.robotNodeFor(id), heading);
-    activeRobotView.scene = 'interior';
+    setRobotHeading(node, heading);
     interior.setFirstPerson(true);
-    updateRobotCamera(interior.robotNodeFor(id));
+    activeRobotView.scene = 'interior';
+    updateRobotCamera(node);
     return;
   }
   if (direction === 'exit' && activeRobotView.scene === 'interior') {
@@ -708,6 +710,7 @@ window.__town__ = {
   mode: () => (interior.isActive() ? 'interior' : 'town'),
   robotView: {
     active: () => Boolean(activeRobotView),
+    scene: () => activeRobotView?.scene ?? null,
     exit: exitRobotView,
   },
   enterBuilding: (id) => interiorFlow.handleBuildingClick(id),
@@ -723,6 +726,7 @@ window.__town__ = {
     robotIds: () => interior.robotIds(),
     selectedId: () => interior.selectedId(),
     selectedRobotId: () => interior.selectedRobotId(),
+    isFirstPerson: () => interior.isFirstPerson(),
     refreshObjects: () => interior.refreshObjects(),
     refreshRobots: () => interior.refreshRobots(),
     freeSpotFor: (part, rot) => interior.freeSpotFor(part, rot),

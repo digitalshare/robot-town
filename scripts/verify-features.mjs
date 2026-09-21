@@ -265,6 +265,7 @@ try {
   await page.click('#robot-first-person');
   await page.waitForTimeout(150);
   check('town robot opens first-person view', await page.evaluate(() => window.__town__.robotView.active()));
+  check('town first-person view starts in the town scene', (await page.evaluate(() => window.__town__.robotView.scene())) === 'town');
   check('first-person HUD names the town robot', (await page.textContent('#robot-pov-name')) === street?.name);
   await page.click('#robot-pov-exit');
   check('town first-person view exits cleanly', !(await page.evaluate(() => window.__town__.robotView.active())));

@@ -219,9 +219,11 @@ export function createInteriorView({ townStore, dom, getRobotOccupants = null })
     }
   }
 
-  function addRobotNodes() {
+  function addRobotNodes(forceRobotId = null) {
     const occupants = getRobotOccupants?.(record.id);
-    const entities = townStore.getRobots(record.id).filter((entity) => !occupants || occupants.has(entity.id));
+    const entities = townStore.getRobots(record.id).filter(
+      (entity) => entity.id === forceRobotId || !occupants || occupants.has(entity.id)
+    );
     robotOccupantKey = occupants ? [...occupants].sort().join('|') : null;
     robots = createRobots({
       group: robotsRoot,
@@ -340,7 +342,7 @@ export function createInteriorView({ townStore, dom, getRobotOccupants = null })
     resync();
   }
 
-  function enter(target) {
+  function enter(target, { robotId = null } = {}) {
     clear();
     record = target;
     room = roomFor(target);
@@ -358,7 +360,7 @@ export function createInteriorView({ townStore, dom, getRobotOccupants = null })
 
     robotsRoot = new THREE.Group();
     content.add(robotsRoot);
-    addRobotNodes();
+    addRobotNodes(robotId);
 
     counts = originCounts();
 
