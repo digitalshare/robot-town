@@ -175,6 +175,50 @@ body {
   display: none;
 }
 
+.robot-pov-minimap {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 30;
+  width: 204px;
+  padding: 10px;
+  background: rgba(8, 18, 24, 0.9);
+  border: 1px solid var(--hud-border);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.robot-pov-minimap[hidden] {
+  display: none;
+}
+
+.robot-pov-minimap__head {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px 8px;
+}
+
+.robot-pov-minimap__title,
+.robot-pov-minimap__legend {
+  color: var(--hud-cyan);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.robot-pov-minimap__legend {
+  color: var(--hud-amber);
+}
+
+#robot-pov-minimap-canvas {
+  display: block;
+  width: 180px;
+  height: 180px;
+  border: 1px solid rgba(89, 220, 234, 0.28);
+  border-radius: 6px;
+}
+
 .robot-pov__label,
 .robot-pov__name {
   text-transform: uppercase;
@@ -275,6 +319,11 @@ body {
   .robot-pov-plan {
     top: 64px;
     right: 12px;
+  }
+
+  .robot-pov-minimap {
+    right: 12px;
+    bottom: 12px;
   }
 }
 

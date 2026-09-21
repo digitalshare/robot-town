@@ -10,7 +10,7 @@ import { createInteriorView } from './interior/interiorView.js';
 import { createHover } from './interaction/hover.js';
 import { createSiteSelect } from './interaction/siteSelect.js';
 import { createObjectSelect } from './interaction/objectSelect.js';
-import { SECTOR, ROAD_SPACING, mapChipLabel } from './data/layout.js';
+import { BUILDINGS, SECTOR, ROAD_SPACING, mapChipLabel } from './data/layout.js';
 import { createAiStore } from './ai/store.js';
 import { createMenu } from './ui/menu.js';
 import { createConfirmBar } from './ui/confirmBar.js';
@@ -38,6 +38,9 @@ const robotPovPlan = document.getElementById('robot-pov-plan');
 const robotPovStatus = document.getElementById('robot-pov-status');
 const robotPovHistory = document.getElementById('robot-pov-history');
 const robotPovUpcoming = document.getElementById('robot-pov-upcoming');
+const robotPovMinimap = document.getElementById('robot-pov-minimap');
+const robotPovMinimapCanvas = document.getElementById('robot-pov-minimap-canvas');
+const robotPovMinimapContext = robotPovMinimapCanvas.getContext('2d');
 
 const buildingsGroup = new THREE.Group();
 const townStore = createTownStore();
@@ -299,6 +302,7 @@ function enterRobotView(target) {
   else controls.enabled = false;
   robotPovName.textContent = target.entry.name;
   robotPov.hidden = false;
+  robotPovMinimap.hidden = false;
   robotPovPlan.hidden = false;
   renderRobotVisitPlan();
   updateRobotCamera(node);
@@ -316,7 +320,99 @@ function exitRobotView() {
     townRobots.select(view.id);
   }
   robotPov.hidden = true;
+  robotPovMinimap.hidden = true;
   robotPovPlan.hidden = true;
+}
+
+function robotMapPosition() {
+  if (!activeRobotView) return null;
+  if (activeRobotView.scene === 'town') {
+    const node = townRobots.nodeFor(activeRobotView.id);
+    if (!node) return null;
+    node.updateWorldMatrix(true, true);
+    const position = node.getWorldPosition(new THREE.Vector3());
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion()));
+    return { x: position.x, z: position.z, dx: forward.x, dz: forward.z };
+  }
+
+  const entry = townStore.getRobot(activeRobotView.id);
+  const record = entry ? findBuildingRecord(townStore.getState(), entry.buildingId) : null;
+  const node = interior.robotNodeFor(activeRobotView.id);
+  if (!record || !node) return null;
+  const builtin = BUILDINGS.find((building) => building.id === record.id);
+  const placement = townStore.getState().placements.find((item) => item.libraryId === record.id);
+  const x = builtin?.x ?? placement?.x;
+  const z = builtin?.z ?? placement?.z;
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion()));
+  return { x, z, dx: forward.x, dz: forward.z };
+}
+
+function renderRobotMinimap() {
+  if (!activeRobotView) return;
+  const map = robotMapPosition();
+  if (!map) return;
+  const grid = manager.getGrid();
+  const { minX, maxX, minZ, maxZ } = grid.bounds;
+  const context = robotPovMinimapContext;
+  const size = robotPovMinimapCanvas.width;
+  const scope = Math.min(86, Math.max(54, Math.min(maxX - minX, maxZ - minZ) * 0.62));
+  const centerX = Math.max(minX + scope / 2, Math.min(maxX - scope / 2, map.x));
+  const centerZ = Math.max(minZ + scope / 2, Math.min(maxZ - scope / 2, map.z));
+  const toCanvas = (x, z) => ({ x: ((x - centerX) / scope + 0.5) * size, y: ((z - centerZ) / scope + 0.5) * size });
+
+  context.clearRect(0, 0, size, size);
+  context.fillStyle = '#0b2027';
+  context.fillRect(0, 0, size, size);
+  context.strokeStyle = 'rgba(89, 220, 234, 0.22)';
+  context.lineWidth = 2;
+  for (const x of grid.linesX) {
+    const point = toCanvas(x, centerZ);
+    context.beginPath();
+    context.moveTo(point.x, 0);
+    context.lineTo(point.x, size);
+    context.stroke();
+  }
+  for (const z of grid.linesZ) {
+    const point = toCanvas(centerX, z);
+    context.beginPath();
+    context.moveTo(0, point.y);
+    context.lineTo(size, point.y);
+    context.stroke();
+  }
+
+  const state = townStore.getState();
+  const buildings = [...BUILDINGS, ...state.placements.map((placement) => {
+    const entry = state.library.find((item) => item.id === placement.libraryId);
+    return { ...placement, footprint: placement.footprint, name: entry?.name };
+  })];
+  context.fillStyle = 'rgba(186, 205, 210, 0.48)';
+  context.strokeStyle = 'rgba(89, 220, 234, 0.45)';
+  context.lineWidth = 1;
+  for (const building of buildings) {
+    const point = toCanvas(building.x, building.z);
+    const width = (building.footprint[0] / scope) * size;
+    const height = (building.footprint[1] / scope) * size;
+    context.fillRect(point.x - width / 2, point.y - height / 2, width, height);
+    context.strokeRect(point.x - width / 2, point.y - height / 2, width, height);
+  }
+
+  const marker = toCanvas(map.x, map.z);
+  context.save();
+  context.translate(marker.x, marker.y);
+  context.rotate(Math.atan2(map.dx, map.dz));
+  context.fillStyle = '#ffc857';
+  context.strokeStyle = '#fff4cf';
+  context.lineWidth = 1.5;
+  context.beginPath();
+  context.moveTo(0, -8);
+  context.lineTo(5, 6);
+  context.lineTo(0, 3);
+  context.lineTo(-5, 6);
+  context.closePath();
+  context.fill();
+  context.stroke();
+  context.restore();
 }
 
 function renderRobotVisitPlan() {
@@ -581,6 +677,7 @@ renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
   townRobots.update(dt);
   if (activeRobotView) renderRobotVisitPlan();
+  if (activeRobotView) renderRobotMinimap();
   if (interior.isActive()) {
     interior.update(dt);
     if (activeRobotView?.scene === 'interior') {

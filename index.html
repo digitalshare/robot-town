@@ -20,6 +20,13 @@
       <div id="robot-pov-name" class="robot-pov__name"></div>
       <button id="robot-pov-exit" class="btn" type="button">EXIT VIEW</button>
     </div>
+    <aside id="robot-pov-minimap" class="robot-pov-minimap" aria-label="TOWN MINIMAP" hidden>
+      <div class="robot-pov-minimap__head">
+        <span class="robot-pov-minimap__title">LOCAL MAP</span>
+        <span class="robot-pov-minimap__legend">▲ YOU</span>
+      </div>
+      <canvas id="robot-pov-minimap-canvas" width="180" height="180"></canvas>
+    </aside>
     <aside id="robot-pov-plan" class="robot-pov-plan" aria-label="ROBOT VISIT PLAN" hidden>
       <div class="robot-pov-plan__head">
         <span class="robot-pov-plan__title">VISIT LOG</span>
