@@ -443,29 +443,96 @@ function renderRobotMinimap() {
     droneport: '#b88661', recycling: '#887f70', datacore: '#697f9e', manufacturing: '#aa8567',
     maintenance: '#c1a168', gardens: '#769b73', warehouse: '#a99a7a', aistrategy: '#8279a0',
   };
-  for (const building of buildings) {
+
+  const drawRoofPlan = (building, fill, offsetX = 0.8, offsetZ = 0.8, shadow = false) => {
+    const type = building.type;
     const [buildingWidth, buildingDepth] = building.footprint;
-    fillRect(building.x + 0.8, building.z + 0.8, buildingWidth, buildingDepth, 'rgba(30, 42, 35, 0.32)');
-    const roof = fillRect(building.x, building.z, buildingWidth, buildingDepth, roofColors[building.type] ?? '#a89d82');
-    context.strokeStyle = 'rgba(45, 54, 46, 0.8)';
-    context.lineWidth = Math.max(1, width(0.35));
-    context.strokeRect(roof.x, roof.y, roof.w, roof.h);
-    context.strokeStyle = 'rgba(255, 238, 185, 0.42)';
-    context.lineWidth = Math.max(1, width(0.22));
-    if (building.type === 'solararray') {
-      for (let i = -2; i <= 2; i++) {
-        const x = building.x + i * Math.max(1.5, buildingWidth / 5);
-        const point = toCanvas(x, building.z);
-        context.beginPath(); context.moveTo(point.x, roof.y + 1); context.lineTo(point.x, roof.y + roof.h - 1); context.stroke();
-      }
-    } else if (building.type === 'gardens') {
-      context.strokeRect(roof.x + roof.w * 0.18, roof.y + roof.h * 0.18, roof.w * 0.64, roof.h * 0.64);
-    } else {
+    context.save();
+    const origin = toCanvas(building.x + offsetX, building.z + offsetZ);
+    context.translate(origin.x, origin.y);
+    context.scale(scale, scale);
+    context.fillStyle = fill;
+    context.strokeStyle = shadow ? 'transparent' : 'rgba(45, 54, 46, 0.8)';
+    context.lineWidth = 0.35;
+
+    const rect = (x, z, w, d, radius = 0) => {
       context.beginPath();
-      context.moveTo(roof.x + roof.w * 0.16, roof.y + roof.h * 0.5);
-      context.lineTo(roof.x + roof.w * 0.84, roof.y + roof.h * 0.5);
-      context.stroke();
+      if (radius && context.roundRect) context.roundRect(x - w / 2, z - d / 2, w, d, radius);
+      else context.rect(x - w / 2, z - d / 2, w, d);
+      context.fill();
+      if (!shadow) context.stroke();
+    };
+    const circle = (x, z, radius, sides = 24) => {
+      context.beginPath();
+      context.arc(x, z, radius, 0, Math.PI * 2);
+      context.fill();
+      if (!shadow) context.stroke();
+      if (!shadow && sides < 24) {
+        context.beginPath();
+        for (let i = 0; i <= sides; i++) {
+          const a = -Math.PI / 2 + (i * Math.PI * 2) / sides;
+          const px = x + Math.cos(a) * radius;
+          const pz = z + Math.sin(a) * radius;
+          if (!i) context.moveTo(px, pz); else context.lineTo(px, pz);
+        }
+        context.stroke();
+      }
+    };
+    const line = (x1, z1, x2, z2) => {
+      context.beginPath(); context.moveTo(x1, z1); context.lineTo(x2, z2); context.stroke();
+    };
+    const hex = (x, z, radius) => {
+      context.beginPath();
+      for (let i = 0; i <= 6; i++) {
+        const a = Math.PI / 6 + (i * Math.PI) / 3;
+        const px = x + Math.cos(a) * radius;
+        const pz = z + Math.sin(a) * radius;
+        if (!i) context.moveTo(px, pz); else context.lineTo(px, pz);
+      }
+      context.fill();
+      if (!shadow) context.stroke();
+    };
+
+    if (type === 'housing') {
+      for (const [x, z, radius] of [[-4, -3, 3], [3.5, -5, 2.6], [0.5, 3.5, 2.8], [6.5, 2.5, 2.2]]) circle(x, z, radius);
+      if (!shadow) { line(-4, -3, 0.5, 3.5); line(3.5, -5, 6.5, 2.5); }
+    } else if (type === 'labs') {
+      rect(-7.5, -2.5, 7.2, 7.2, 0.35); rect(7.5, 2.5, 7.2, 7.2, 0.35);
+      if (!shadow) { context.strokeStyle = 'rgba(255, 238, 185, 0.42)'; line(-4, 0, 4, 0); }
+    } else if (type === 'solararray') {
+      rect(0, -3, 11, 5, 0.15); rect(0, 3, 11, 5, 0.15);
+      if (!shadow) for (const z of [-3, 3]) for (let x = -4; x <= 4; x += 2) line(x, z - 2, x, z + 2);
+    } else if (type === 'powerstorage') {
+      rect(0, -3.1, 8.6, 0.8); rect(-4.3, 0, 0.8, 6.4); rect(4.3, 0, 0.8, 6.4);
+      if (!shadow) for (let x = -2.7; x <= 2.7; x += 1.8) circle(x, 0, 0.9, 14);
+    } else if (type === 'droneport') {
+      hex(0, 0, 6.8); circle(0, 0, 3); hex(0, -4.6, 2.4);
+      if (!shadow) { line(-3.4, 0, 3.4, 0); line(0, -3.4, 0, 3.4); }
+    } else if (type === 'recycling') {
+      circle(0, 0, 3.05); if (!shadow) circle(0, 0, 2.35);
+    } else if (type === 'datacore') {
+      rect(0, 0, 14.5, 6, 0.25);
+      for (const x of [-4.5, 0, 4.5]) rect(x, 0, 3.2, 3.2, 0.18);
+      if (!shadow) for (let i = 0; i < 6; i++) { const a = (i * Math.PI) / 3; rect(Math.cos(a) * 8.5, Math.sin(a) * 8.5, 3, 2, 0.1); }
+    } else if (type === 'manufacturing') {
+      rect(0, -1, 16, 10, 0.25); if (!shadow) { line(-7, 3.5, 7, 3.5); line(-5, -5, -5, 0); line(-2.5, -5, -2.5, 0); }
+    } else if (type === 'maintenance') {
+      rect(0, 0, 8, 8, 0.25); if (!shadow) { line(-2.4, -2.5, 2.4, -2.5); line(-2.4, -2.5, -2.4, 2.4); }
+    } else if (type === 'gardens') {
+      circle(0, 0, 6); if (!shadow) { context.strokeStyle = 'rgba(255, 238, 185, 0.42)'; for (const a of [0, Math.PI / 3, (Math.PI * 2) / 3]) line(Math.cos(a) * 5.8, Math.sin(a) * 5.8, -Math.cos(a) * 5.8, -Math.sin(a) * 5.8); }
+    } else if (type === 'warehouse') {
+      rect(0, -1.5, 20, 10, 0.25); if (!shadow) { context.strokeStyle = 'rgba(255, 238, 185, 0.42)'; line(-6, -5, 6, -5); line(-6, 2.5, 6, 2.5); }
+    } else if (type === 'aistrategy') {
+      rect(0, 0, 11, 9, 0.25); if (!shadow) { context.strokeStyle = 'rgba(255, 238, 185, 0.42)'; line(-5, -2.5, 5, -2.5); line(-5, 0, 5, 0); line(-5, 2, 5, 2); }
+    } else {
+      rect(0, 0, buildingWidth, buildingDepth, 0.25);
     }
+    context.restore();
+  };
+
+  for (const building of buildings) {
+    drawRoofPlan(building, 'rgba(30, 42, 35, 0.32)', 0.8, 0.8, true);
+    drawRoofPlan(building, roofColors[building.type] ?? '#a89d82', 0, 0);
   }
 
   const marker = toCanvas(map.x, map.z);
