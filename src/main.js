@@ -262,14 +262,18 @@ function handleRobotBuildingTransition({ id, buildingId, direction }) {
   if (direction === 'enter' && activeRobotView.scene === 'town') {
     const record = findBuildingRecord(townStore.getState(), buildingId);
     if (!record) return;
+    const heading = robotHeading(townRobots.nodeFor(id));
     enterInterior(record);
+    setRobotHeading(interior.robotNodeFor(id), heading);
     activeRobotView.scene = 'interior';
     interior.setFirstPerson(true);
     updateRobotCamera(interior.robotNodeFor(id));
     return;
   }
   if (direction === 'exit' && activeRobotView.scene === 'interior') {
+    const heading = robotHeading(interior.robotNodeFor(id));
     exitInterior({ preserveRobotView: true });
+    setRobotHeading(townRobots.nodeFor(id), heading);
     activeRobotView.scene = 'town';
     controls.enabled = false;
     updateRobotCamera(townRobots.nodeFor(id));
@@ -277,6 +281,17 @@ function handleRobotBuildingTransition({ id, buildingId, direction }) {
 }
 
 let activeRobotView = null;
+
+function robotHeading(node) {
+  if (!node) return new THREE.Vector3(0, 0, 1);
+  node.updateWorldMatrix(true, true);
+  return new THREE.Vector3(0, 0, 1).applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion())).setY(0).normalize();
+}
+
+function setRobotHeading(node, heading) {
+  if (!node || !heading?.lengthSq()) return;
+  node.rotation.y = Math.atan2(heading.x, heading.z);
+}
 
 function updateRobotCamera(node) {
   if (!node) return false;
@@ -361,40 +376,96 @@ function renderRobotMinimap() {
   const centerZ = Math.max(minZ + scope / 2, Math.min(maxZ - scope / 2, map.z));
   const toCanvas = (x, z) => ({ x: ((x - centerX) / scope + 0.5) * size, y: ((z - centerZ) / scope + 0.5) * size });
 
+  const scale = size / scope;
+  const width = (value) => value * scale;
+  const rect = (x, z, w, h) => {
+    const point = toCanvas(x, z);
+    return { x: point.x - width(w) / 2, y: point.y - width(h) / 2, w: width(w), h: width(h) };
+  };
+  const fillRect = (x, z, w, h, fill) => {
+    const r = rect(x, z, w, h);
+    context.fillStyle = fill;
+    context.fillRect(r.x, r.y, r.w, r.h);
+    return r;
+  };
+
   context.clearRect(0, 0, size, size);
-  context.fillStyle = '#0b2027';
+  context.fillStyle = '#788f67';
   context.fillRect(0, 0, size, size);
-  context.strokeStyle = 'rgba(89, 220, 234, 0.22)';
-  context.lineWidth = 2;
+
+  // Light block parcels make the map read as aerial imagery rather than a grid.
+  for (let ix = 0; ix < grid.linesX.length - 1; ix++) {
+    for (let iz = 0; iz < grid.linesZ.length - 1; iz++) {
+      const x = (grid.linesX[ix] + grid.linesX[ix + 1]) / 2;
+      const z = (grid.linesZ[iz] + grid.linesZ[iz + 1]) / 2;
+      fillRect(x, z, grid.linesX[ix + 1] - grid.linesX[ix], grid.linesZ[iz + 1] - grid.linesZ[iz], (ix + iz) % 2 ? '#93a77b' : '#9cad82');
+    }
+  }
+
+  // Roads are drawn as broad paved strips, with subtle edge lines and dashes.
+  context.fillStyle = '#4f5b58';
+  for (const x of grid.linesX) fillRect(x, centerZ, grid.roadWidth, maxZ - minZ, '#4f5b58');
+  for (const z of grid.linesZ) fillRect(centerX, z, maxX - minX, grid.roadWidth, '#4f5b58');
+  context.strokeStyle = 'rgba(218, 215, 175, 0.7)';
+  context.lineWidth = Math.max(1, width(0.16));
+  context.setLineDash([width(2.2), width(2.8)]);
   for (const x of grid.linesX) {
     const point = toCanvas(x, centerZ);
-    context.beginPath();
-    context.moveTo(point.x, 0);
-    context.lineTo(point.x, size);
-    context.stroke();
+    context.beginPath(); context.moveTo(point.x, 0); context.lineTo(point.x, size); context.stroke();
   }
   for (const z of grid.linesZ) {
     const point = toCanvas(centerX, z);
-    context.beginPath();
-    context.moveTo(0, point.y);
-    context.lineTo(size, point.y);
-    context.stroke();
+    context.beginPath(); context.moveTo(0, point.y); context.lineTo(size, point.y); context.stroke();
+  }
+  context.setLineDash([]);
+
+  // Small vegetation marks provide scale and break up empty parcels.
+  const treePoints = [];
+  for (const x of grid.linesX) {
+    for (let z = minZ + 3; z < maxZ; z += 8) treePoints.push([x - 5, z]);
+  }
+  for (const z of grid.linesZ) {
+    for (let x = minX + 3; x < maxX; x += 8) treePoints.push([x, z - 5]);
+  }
+  context.fillStyle = '#44644a';
+  for (const [x, z] of treePoints) {
+    const point = toCanvas(x, z);
+    context.beginPath(); context.arc(point.x, point.y, Math.max(1, width(0.9)), 0, Math.PI * 2); context.fill();
   }
 
   const state = townStore.getState();
   const buildings = [...BUILDINGS, ...state.placements.map((placement) => {
     const entry = state.library.find((item) => item.id === placement.libraryId);
-    return { ...placement, footprint: placement.footprint, name: entry?.name };
+    return { ...placement, type: entry?.spec?.type, footprint: placement.footprint, name: entry?.name };
   })];
-  context.fillStyle = 'rgba(186, 205, 210, 0.48)';
-  context.strokeStyle = 'rgba(89, 220, 234, 0.45)';
-  context.lineWidth = 1;
+  const roofColors = {
+    housing: '#c7a878', labs: '#b7c5c0', solararray: '#4f7290', powerstorage: '#9e7662',
+    droneport: '#b88661', recycling: '#887f70', datacore: '#697f9e', manufacturing: '#aa8567',
+    maintenance: '#c1a168', gardens: '#769b73', warehouse: '#a99a7a', aistrategy: '#8279a0',
+  };
   for (const building of buildings) {
-    const point = toCanvas(building.x, building.z);
-    const width = (building.footprint[0] / scope) * size;
-    const height = (building.footprint[1] / scope) * size;
-    context.fillRect(point.x - width / 2, point.y - height / 2, width, height);
-    context.strokeRect(point.x - width / 2, point.y - height / 2, width, height);
+    const [buildingWidth, buildingDepth] = building.footprint;
+    fillRect(building.x + 0.8, building.z + 0.8, buildingWidth, buildingDepth, 'rgba(30, 42, 35, 0.32)');
+    const roof = fillRect(building.x, building.z, buildingWidth, buildingDepth, roofColors[building.type] ?? '#a89d82');
+    context.strokeStyle = 'rgba(45, 54, 46, 0.8)';
+    context.lineWidth = Math.max(1, width(0.35));
+    context.strokeRect(roof.x, roof.y, roof.w, roof.h);
+    context.strokeStyle = 'rgba(255, 238, 185, 0.42)';
+    context.lineWidth = Math.max(1, width(0.22));
+    if (building.type === 'solararray') {
+      for (let i = -2; i <= 2; i++) {
+        const x = building.x + i * Math.max(1.5, buildingWidth / 5);
+        const point = toCanvas(x, building.z);
+        context.beginPath(); context.moveTo(point.x, roof.y + 1); context.lineTo(point.x, roof.y + roof.h - 1); context.stroke();
+      }
+    } else if (building.type === 'gardens') {
+      context.strokeRect(roof.x + roof.w * 0.18, roof.y + roof.h * 0.18, roof.w * 0.64, roof.h * 0.64);
+    } else {
+      context.beginPath();
+      context.moveTo(roof.x + roof.w * 0.16, roof.y + roof.h * 0.5);
+      context.lineTo(roof.x + roof.w * 0.84, roof.y + roof.h * 0.5);
+      context.stroke();
+    }
   }
 
   const marker = toCanvas(map.x, map.z);
