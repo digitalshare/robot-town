@@ -191,6 +191,93 @@ body {
   font-weight: 600;
 }
 
+.robot-pov-plan {
+  position: fixed;
+  top: 76px;
+  right: 20px;
+  z-index: 30;
+  width: min(280px, calc(100vw - 40px));
+  padding: 13px 14px;
+  background: rgba(8, 18, 24, 0.9);
+  border: 1px solid var(--hud-border);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.robot-pov-plan[hidden] {
+  display: none;
+}
+
+.robot-pov-plan__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--hud-border);
+}
+
+.robot-pov-plan__title,
+.robot-pov-plan__caption,
+.robot-pov-plan__status {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 9px;
+}
+
+.robot-pov-plan__title,
+.robot-pov-plan__caption {
+  color: var(--hud-cyan);
+}
+
+.robot-pov-plan__status {
+  color: var(--hud-amber);
+  text-align: right;
+}
+
+.robot-pov-plan__section {
+  padding-top: 10px;
+}
+
+.robot-pov-plan__list {
+  display: grid;
+  gap: 5px;
+  margin: 6px 0 0;
+  padding-left: 22px;
+  color: var(--hud-text);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.robot-pov-plan__list:empty::after {
+  content: 'NO VISITS RECORDED';
+  margin-left: -22px;
+  color: var(--hud-muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.robot-pov-plan__list--upcoming:empty::after {
+  content: 'NO UPCOMING VISITS';
+}
+
+.robot-pov-plan__item--current {
+  color: var(--hud-amber);
+}
+
+@media (max-width: 640px) {
+  .robot-pov {
+    top: 12px;
+    right: 12px;
+  }
+
+  .robot-pov-plan {
+    top: 64px;
+    right: 12px;
+  }
+}
+
 .interior-bar__name {
   color: var(--hud-text);
   text-transform: uppercase;

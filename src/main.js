@@ -34,6 +34,10 @@ const robotCamera = new THREE.PerspectiveCamera(74, window.innerWidth / Math.max
 const robotPov = document.getElementById('robot-pov');
 const robotPovName = document.getElementById('robot-pov-name');
 const robotPovExit = document.getElementById('robot-pov-exit');
+const robotPovPlan = document.getElementById('robot-pov-plan');
+const robotPovStatus = document.getElementById('robot-pov-status');
+const robotPovHistory = document.getElementById('robot-pov-history');
+const robotPovUpcoming = document.getElementById('robot-pov-upcoming');
 
 const buildingsGroup = new THREE.Group();
 const townStore = createTownStore();
@@ -45,7 +49,13 @@ scene.add(manager.town);
 // Sits beside the manager's base and building groups on purpose: base is
 // disposed on every map expansion, and buildingsGroup is raycast recursively by
 // the hover picker, where a robot hit would mask the building behind it.
-const townRobots = createTownRobots({ townStore, parent: manager.town, buildings: buildingsGroup, getGrid: () => manager.getGrid() });
+const townRobots = createTownRobots({
+  townStore,
+  parent: manager.town,
+  buildings: buildingsGroup,
+  getGrid: () => manager.getGrid(),
+  onBuildingTransition: handleRobotBuildingTransition,
+});
 frameSun(sun, manager.getGrid().bounds);
 
 const sectorChip = document.getElementById('sector-chip');
@@ -230,9 +240,9 @@ function syncRobotPanel() {
   showRobot(shown.entry.id);
 }
 
-function exitInterior() {
+function exitInterior({ preserveRobotView = false } = {}) {
   if (!interior.isActive()) return;
-  if (activeRobotView?.scene === 'interior') exitRobotView();
+  if (activeRobotView?.scene === 'interior' && !preserveRobotView) exitRobotView();
   interior.exit();
   controls.enabled = true;
   interiorBar.hide();
@@ -242,6 +252,25 @@ function exitInterior() {
   mapChip.hidden = false;
   menu.objectsTab.refresh();
   menu.robotsTab.refresh();
+}
+
+function handleRobotBuildingTransition({ id, buildingId, direction }) {
+  if (!activeRobotView || activeRobotView.id !== id) return;
+  if (direction === 'enter' && activeRobotView.scene === 'town') {
+    const record = findBuildingRecord(townStore.getState(), buildingId);
+    if (!record) return;
+    enterInterior(record);
+    activeRobotView.scene = 'interior';
+    interior.setFirstPerson(true);
+    updateRobotCamera(interior.robotNodeFor(id));
+    return;
+  }
+  if (direction === 'exit' && activeRobotView.scene === 'interior') {
+    exitInterior({ preserveRobotView: true });
+    activeRobotView.scene = 'town';
+    controls.enabled = false;
+    updateRobotCamera(townRobots.nodeFor(id));
+  }
 }
 
 let activeRobotView = null;
@@ -270,6 +299,8 @@ function enterRobotView(target) {
   else controls.enabled = false;
   robotPovName.textContent = target.entry.name;
   robotPov.hidden = false;
+  robotPovPlan.hidden = false;
+  renderRobotVisitPlan();
   updateRobotCamera(node);
 }
 
@@ -285,6 +316,34 @@ function exitRobotView() {
     townRobots.select(view.id);
   }
   robotPov.hidden = true;
+  robotPovPlan.hidden = true;
+}
+
+function renderRobotVisitPlan() {
+  if (!activeRobotView) return;
+  const plan = townRobots.visitPlan(activeRobotView.id);
+  if (!plan) return;
+  const status = plan.phase === 'to-building'
+    ? `EN ROUTE: ${plan.current?.name ?? 'BUILDING'}`
+    : plan.phase === 'inside'
+      ? `INSIDE: ${plan.current?.name ?? 'BUILDING'}`
+      : 'ON STREET';
+  robotPovStatus.textContent = status;
+  robotPovHistory.replaceChildren(
+    ...plan.history.map((entry) => {
+      const item = document.createElement('li');
+      item.textContent = entry.name;
+      return item;
+    })
+  );
+  robotPovUpcoming.replaceChildren(
+    ...plan.upcoming.map((entry, index) => {
+      const item = document.createElement('li');
+      item.textContent = entry.name;
+      if (index === 0 && plan.phase === 'to-building') item.className = 'robot-pov-plan__item--current';
+      return item;
+    })
+  );
 }
 
 robotPovExit.addEventListener('click', exitRobotView);
@@ -521,6 +580,7 @@ let ready = false;
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
   townRobots.update(dt);
+  if (activeRobotView) renderRobotVisitPlan();
   if (interior.isActive()) {
     interior.update(dt);
     if (activeRobotView?.scene === 'interior') {
