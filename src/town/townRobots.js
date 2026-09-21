@@ -27,7 +27,7 @@ const TREE_PAD = 0.3;
 const PAD_OBSTACLE = 3.2;
 const PAD_PAD = 0.5;
 const SEED_CLEARANCE = 1.85; // 0.35 grass-pad apron + 1.5 of walking room
-const BUILDING_STAY_RANGE = [2.5, 6];
+const BUILDING_STAY_RANGE = [15, 30];
 const BUILDING_VISIT_INTERVAL = [4, 12];
 const PLAN_LENGTH = 3;
 

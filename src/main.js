@@ -165,12 +165,13 @@ hover.onClick((hit) => {
 // rebuild, so interior.stats() would still report the pre-design node count.
 const roomObjectCount = () => townStore.getObjects(interior.current()?.id ?? '').length;
 
-function enterInterior(record) {
+function enterInterior(record, { preserveRobotId = null } = {}) {
   confirmBar.hide();
   objectPanel.hide();
   robotPanel.hide();
   townRobots.clearSelect();
   ensureDefaults(record);
+  if (preserveRobotId) townRobots.select(preserveRobotId);
   interior.enter(record);
   controls.enabled = false;
   tooltip.classList.remove('visible');
@@ -263,7 +264,8 @@ function handleRobotBuildingTransition({ id, buildingId, direction }) {
     const record = findBuildingRecord(townStore.getState(), buildingId);
     if (!record) return;
     const heading = robotHeading(townRobots.nodeFor(id));
-    enterInterior(record);
+    enterInterior(record, { preserveRobotId: id });
+    interior.selectRobot(id);
     setRobotHeading(interior.robotNodeFor(id), heading);
     activeRobotView.scene = 'interior';
     interior.setFirstPerson(true);
@@ -274,6 +276,7 @@ function handleRobotBuildingTransition({ id, buildingId, direction }) {
     const heading = robotHeading(interior.robotNodeFor(id));
     exitInterior({ preserveRobotView: true });
     setRobotHeading(townRobots.nodeFor(id), heading);
+    townRobots.select(id);
     activeRobotView.scene = 'town';
     controls.enabled = false;
     updateRobotCamera(townRobots.nodeFor(id));
