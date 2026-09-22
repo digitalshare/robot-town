@@ -20,6 +20,117 @@ body {
   display: block;
 }
 
+.robot-chat {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100vw - 40px));
+  max-height: min(560px, calc(100vh - 40px));
+  background: rgba(8, 18, 24, 0.94);
+  border: 1px solid rgba(120, 220, 230, 0.4);
+  border-radius: 12px;
+  color: #eaf6f8;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+
+.robot-chat[hidden] {
+  display: none;
+}
+
+.robot-chat__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(120, 220, 230, 0.25);
+}
+
+.robot-chat__title,
+.robot-chat__role,
+.robot-chat__status {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.robot-chat__title {
+  color: #59dcea;
+}
+
+.robot-chat__messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 160px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.robot-chat__message {
+  max-width: 90%;
+  padding: 9px 10px;
+  border: 1px solid rgba(120, 220, 230, 0.2);
+  border-radius: 9px;
+  background: rgba(25, 47, 54, 0.7);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.robot-chat__message--user {
+  align-self: flex-end;
+  background: rgba(42, 168, 191, 0.25);
+}
+
+.robot-chat__role {
+  display: block;
+  margin-bottom: 4px;
+  color: #e8c26a;
+}
+
+.robot-chat__message p {
+  white-space: pre-wrap;
+}
+
+.robot-chat__status {
+  min-height: 24px;
+  padding: 0 14px;
+  color: rgba(214, 235, 239, 0.62);
+}
+
+.robot-chat__form {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid rgba(120, 220, 230, 0.25);
+}
+
+.robot-chat__input {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  padding: 9px;
+  border: 1px solid rgba(120, 220, 230, 0.3);
+  border-radius: 7px;
+  background: rgba(5, 14, 18, 0.75);
+  color: #eaf6f8;
+  font: inherit;
+}
+
+.robot-chat__input:focus {
+  outline: 1px solid #59dcea;
+}
+
+.robot-chat__send {
+  align-self: flex-end;
+}
+
 .hud-chip {
   position: fixed;
   z-index: 10;

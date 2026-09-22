@@ -17,6 +17,7 @@ import { createConfirmBar } from './ui/confirmBar.js';
 import { createInteriorBar } from './ui/interiorBar.js';
 import { createObjectPanel } from './ui/objectPanel.js';
 import { createRobotPanel } from './ui/robotPanel.js';
+import { createRobotChatPanel } from './ui/robotChatPanel.js';
 import { roomFor } from './interior/spaceSpec.js';
 import { defaultLayoutFor } from './interior/themes.js';
 import { createBuildingFlow } from './flow/buildingFlow.js';
@@ -126,8 +127,10 @@ const robotPanel = createRobotPanel({
   townStore,
   interiorView: interior,
   onFirstPerson: enterRobotView,
+  onChat: (target) => robotChat.show(target),
   onClose: () => townRobots.clearSelect(),
 });
+const robotChat = createRobotChatPanel();
 const objectSelect = createObjectSelect({
   camera: interior.camera,
   dom: renderer.domElement,
