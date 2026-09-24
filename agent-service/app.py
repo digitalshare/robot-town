@@ -67,8 +67,6 @@ app.add_middleware(
 )
 
 agents: dict[str, RobotAgent] = {}
-dataset_lock = asyncio.Lock()
-dataset_ready = False
 
 
 def authorize(authorization: str | None) -> None:
@@ -110,32 +108,6 @@ def get_agent(robot_id: str, robot: dict[str, Any]) -> RobotAgent:
     return created
 
 
-async def ensure_cognee_dataset() -> None:
-    global dataset_ready
-    if dataset_ready:
-        return
-    async with dataset_lock:
-        if dataset_ready:
-            return
-        dataset = ROBOT_TOWN_DATASET
-        headers = {"X-Api-Key": required_env("COGNEE_API_KEY")}
-        async with httpx.AsyncClient(timeout=25) as client:
-            listed = await client.get(cognee_url("/api/v1/datasets/"), headers=headers)
-            listed.raise_for_status()
-            names = {item.get("name") for item in listed.json() if isinstance(item, dict)}
-            if dataset not in names:
-                created = await client.post(
-                    cognee_url("/api/v1/remember"),
-                    headers=headers,
-                    data={
-                        "datasetName": dataset,
-                        "raw_data": "Robot Town memory namespace marker. Do not use this as a conversational fact.",
-                    },
-                )
-                created.raise_for_status()
-        dataset_ready = True
-
-
 async def cognee_recall(robot_id: str, message: str) -> str:
     headers = {"X-Api-Key": required_env("COGNEE_API_KEY")}
     dataset = ROBOT_TOWN_DATASET
@@ -151,7 +123,6 @@ async def cognee_recall(robot_id: str, message: str) -> str:
     # A freshly reset robot-town dataset does not exist until the first write.
     # Treat that expected first-run 404 as empty private memory.
     if response.status_code == 404:
-        await ensure_cognee_dataset()
         return ""
     response.raise_for_status()
     return private_memory_text(response.json(), robot_id)
@@ -175,26 +146,32 @@ def private_memory_text(payload: Any, robot_id: str) -> str:
     return "\n\n".join(parts)[:MAX_MEMORY_CHARS]
 
 
+def durable_memory_text(robot_id: str, robot: dict[str, Any], question: str, answer: str) -> str:
+    """Format a conversation for durable dataset ingestion without a session cache."""
+    name = str(robot.get("name") or robot_id)[:80]
+    return (
+        f"Robot Town conversation for robot_id={robot_id} robot_name={name}\n"
+        f"User: {question[:MAX_MESSAGE_CHARS]}\n"
+        f"Robot: {answer[:MAX_MEMORY_CHARS]}"
+    )
+
+
 async def cognee_remember(robot_id: str, robot: dict[str, Any], question: str, answer: str) -> None:
     headers = {
         "X-Api-Key": required_env("COGNEE_API_KEY"),
         "Content-Type": "application/json",
     }
-    body = {
-        "entry": {
-            "type": "qa",
-            "question": (
-                f"[robot_id={robot_id} robot_name={str(robot.get('name') or robot_id)[:80]}] "
-                f"{question[:MAX_MESSAGE_CHARS]}"
-            ),
-            "answer": answer[:MAX_MEMORY_CHARS],
-        },
-        "dataset_name": ROBOT_TOWN_DATASET,
-        "session_id": robot_session_id(robot_id),
-    }
     async with httpx.AsyncClient(timeout=25) as client:
-        response = await client.post(cognee_url("/api/v1/remember/entry"), headers=headers, json=body)
-    response.raise_for_status()
+        durable_response = await client.post(
+            cognee_url("/api/v1/remember"),
+            headers={"X-Api-Key": headers["X-Api-Key"]},
+            data={
+                "datasetName": ROBOT_TOWN_DATASET,
+                "raw_data": durable_memory_text(robot_id, robot, question, answer),
+                "run_in_background": "false",
+            },
+        )
+        durable_response.raise_for_status()
 
 
 @app.get("/health")
