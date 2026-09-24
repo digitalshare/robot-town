@@ -23,7 +23,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 MAX_MESSAGE_CHARS = 2000
 MAX_MEMORY_CHARS = 5000
 ROBOT_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
-ROBOT_TOWN_DATASET = "robot-town"
+ROBOT_TOWN_DATASET = "robot_town"
 
 
 def required_env(name: str) -> str:
@@ -35,6 +35,10 @@ def required_env(name: str) -> str:
 
 def cognee_url(path: str) -> str:
     return f"{required_env('COGNEE_BASE_URL').rstrip('/')}{path}"
+
+
+def robot_session_id(robot_id: str) -> str:
+    return f"robot:{robot_id}"
 
 
 class ChatRequest(BaseModel):
@@ -137,9 +141,8 @@ async def cognee_recall(robot_id: str, message: str) -> str:
     dataset = ROBOT_TOWN_DATASET
     body = {
         "query": message,
-        "session_id": f"robot:{robot_id}",
+        "session_id": robot_session_id(robot_id),
         "datasets": [dataset],
-        "search_type": "HYBRID_COMPLETION",
         "only_context": True,
         "scope": ["session"],
     }
@@ -151,28 +154,25 @@ async def cognee_recall(robot_id: str, message: str) -> str:
         await ensure_cognee_dataset()
         return ""
     response.raise_for_status()
-    payload = response.json()
-    if isinstance(payload, str):
-        return payload[:MAX_MEMORY_CHARS]
-    if isinstance(payload, dict):
-        for key in ("answer", "text", "result", "content"):
-            if isinstance(payload.get(key), str):
-                return payload[key][:MAX_MEMORY_CHARS]
-        return str(payload)[:MAX_MEMORY_CHARS]
-    if isinstance(payload, list):
-        parts = []
-        for item in payload:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                if isinstance(item.get("question"), str) and isinstance(item.get("answer"), str):
-                    parts.append(f"Earlier user: {item['question']}\nRobot: {item['answer']}")
-                    continue
-                value = next((item.get(key) for key in ("answer", "text", "result", "content") if isinstance(item.get(key), str)), None)
-                if value:
-                    parts.append(value)
-        return "\n\n".join(parts)[:MAX_MEMORY_CHARS]
-    return ""
+    return private_memory_text(response.json(), robot_id)
+
+
+def private_memory_text(payload: Any, robot_id: str) -> str:
+    """Render only explicitly tagged QA entries from this robot's session."""
+    if not isinstance(payload, list):
+        return ""
+
+    marker = f"[robot_id={robot_id} "
+    parts = []
+    for item in payload:
+        if not isinstance(item, dict) or item.get("source") != "session":
+            continue
+        question = item.get("question")
+        answer = item.get("answer")
+        if not isinstance(question, str) or not question.startswith(marker) or not isinstance(answer, str):
+            continue
+        parts.append(f"Earlier user: {question}\nRobot: {answer}")
+    return "\n\n".join(parts)[:MAX_MEMORY_CHARS]
 
 
 async def cognee_remember(robot_id: str, robot: dict[str, Any], question: str, answer: str) -> None:
@@ -190,7 +190,7 @@ async def cognee_remember(robot_id: str, robot: dict[str, Any], question: str, a
             "answer": answer[:MAX_MEMORY_CHARS],
         },
         "dataset_name": ROBOT_TOWN_DATASET,
-        "session_id": f"robot:{robot_id}",
+        "session_id": robot_session_id(robot_id),
     }
     async with httpx.AsyncClient(timeout=25) as client:
         response = await client.post(cognee_url("/api/v1/remember/entry"), headers=headers, json=body)
@@ -208,6 +208,8 @@ async def chat(robot_id: str, request: ChatRequest, authorization: str | None = 
     authorize(authorization)
     if not ROBOT_ID.fullmatch(robot_id):
         raise HTTPException(status_code=400, detail="Invalid robot id")
+    if request.robot.get("id") != robot_id:
+        raise HTTPException(status_code=400, detail="Robot identity mismatch")
 
     robot_agent = get_agent(robot_id, request.robot)
     async with robot_agent.lock:

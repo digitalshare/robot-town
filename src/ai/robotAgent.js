@@ -10,18 +10,20 @@ function defaultUrl() {
 const baseUrl = (import.meta.env?.VITE_ROBOT_AGENT_URL || defaultUrl()).replace(/\/$/, '');
 
 export async function chatWithRobot(robot, message, signal) {
+  const robotId = String(robot?.id ?? '').trim();
+  if (!robotId) throw new Error('ROBOT ID IS MISSING');
   const text = String(message ?? '').trim().slice(0, MAX_MESSAGE);
   if (!text) throw new Error('MESSAGE IS EMPTY');
   const token = import.meta.env?.VITE_ROBOT_AGENT_TOKEN || '';
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${baseUrl}/robots/${encodeURIComponent(robot.id)}/chat`, {
+  const response = await fetch(`${baseUrl}/robots/${encodeURIComponent(robotId)}/chat`, {
     method: 'POST',
     headers,
     signal,
     body: JSON.stringify({
       message: text,
-      robot: { id: robot.id, name: robot.name, type: robot.type, building: robot.building },
+      robot: { id: robotId, name: robot.name, type: robot.type, building: robot.building },
     }),
   });
   let payload = null;
