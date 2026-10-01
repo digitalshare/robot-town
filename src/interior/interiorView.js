@@ -224,6 +224,14 @@ export function createInteriorView({ townStore, dom, getRobotOccupants = null })
     const entities = townStore.getRobots(record.id).filter(
       (entity) => entity.id === forceRobotId || !occupants || occupants.has(entity.id)
     );
+    // Town robots visit any building, so a visitor homed elsewhere still needs a body here.
+    const present = new Set(entities.map((entity) => entity.id));
+    for (const id of new Set([forceRobotId, ...(occupants ?? [])])) {
+      const visitor = id && !present.has(id) ? townStore.getRobot(id) : null;
+      if (!visitor) continue;
+      const z = room.d / 2 - room.margin - 0.5;
+      entities.push({ ...visitor, pos: [0, z], rot: 180 });
+    }
     robotOccupantKey = occupants ? [...occupants].sort().join('|') : null;
     robots = createRobots({
       group: robotsRoot,

@@ -80,8 +80,7 @@ const interior = createInteriorView({
   dom: renderer.domElement,
   getRobotOccupants: (buildingId) => {
     const occupants = townRobots.insideRobotIds(buildingId);
-    const active = activeRobotView && townStore.getRobot(activeRobotView.id);
-    if (activeRobotView?.scene === 'town' && active?.buildingId === buildingId) occupants.add(active.id);
+    if (activeRobotView?.scene === 'town' && townStore.getRobot(activeRobotView.id)) occupants.add(activeRobotView.id);
     return occupants;
   },
 });
@@ -280,7 +279,10 @@ function handleRobotBuildingTransition({ id, buildingId, direction }) {
     const heading = robotHeading(townRobots.nodeFor(id));
     enterInterior(record, { preserveRobotId: id });
     const node = interior.robotNodeFor(id);
-    if (!node) return;
+    if (!node) {
+      exitInterior({ preserveRobotView: true });
+      return;
+    }
     interior.selectRobot(id);
     setRobotHeading(node, heading);
     interior.setFirstPerson(true);
