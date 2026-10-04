@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createRenderer } from './core/renderer.js';
 import { createCamera, createControls, resizeCamera } from './core/camera.js';
+import { createWalkView } from './core/walkView.js';
 import { setupEnvironment, frameSun } from './core/lights.js';
 import { createTownStore } from './town/townStore.js';
 import { createTownManager } from './town/townManager.js';
@@ -32,6 +33,7 @@ const { sun } = setupEnvironment(scene, renderer);
 const camera = createCamera();
 const controls = createControls(camera, renderer.domElement);
 const robotCamera = new THREE.PerspectiveCamera(74, window.innerWidth / Math.max(1, window.innerHeight), 0.05, 500);
+const walkCamera = new THREE.PerspectiveCamera(70, window.innerWidth / Math.max(1, window.innerHeight), 0.05, 500);
 const robotCameraPose = {
   node: null,
   position: new THREE.Vector3(),
@@ -300,6 +302,29 @@ function handleRobotBuildingTransition({ id, buildingId, direction }) {
 }
 
 let activeRobotView = null;
+
+const walkView = createWalkView({
+  camera: walkCamera,
+  getGrid: () => manager.getGrid(),
+  getPlacements: () => townStore.getState().placements,
+});
+const walkHint = document.getElementById('walk-hint');
+
+function enterWalkView() {
+  if (walkView.isActive() || activeRobotView || interior.isActive()) return;
+  siteSelect.exit();
+  walkView.enter({ x: controls.target.x, z: controls.target.z });
+  controls.enabled = false;
+  tooltip.classList.remove('visible');
+  walkHint.hidden = false;
+}
+
+function exitWalkView() {
+  if (!walkView.isActive()) return;
+  walkView.exit();
+  controls.enabled = true;
+  walkHint.hidden = true;
+}
 
 function robotHeading(node) {
   if (!node) return new THREE.Vector3(0, 0, 1);
@@ -663,11 +688,26 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   robotCamera.aspect = window.innerWidth / Math.max(1, window.innerHeight);
   robotCamera.updateProjectionMatrix();
+  walkCamera.aspect = window.innerWidth / Math.max(1, window.innerHeight);
+  walkCamera.updateProjectionMatrix();
 });
 
 window.addEventListener(
   'keydown',
   (e) => {
+    if (e.key === 'Escape' && walkView.isActive()) {
+      exitWalkView();
+      e.stopPropagation();
+      return;
+    }
+    if (e.code === 'KeyF' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const tag = e.target?.tagName;
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !e.target?.isContentEditable && !menu.isOpen()) {
+        if (walkView.isActive()) exitWalkView();
+        else enterWalkView();
+        return;
+      }
+    }
     if (e.key === 'Escape' && activeRobotView) {
       exitRobotView();
       e.stopPropagation();
@@ -859,6 +899,9 @@ renderer.setAnimationLoop(() => {
     if (activeRobotView?.scene === 'town') {
       if (!updateRobotCamera(townRobots.nodeFor(activeRobotView.id), dt)) exitRobotView();
       renderer.render(scene, robotCamera);
+    } else if (walkView.isActive()) {
+      walkView.update(dt);
+      renderer.render(scene, walkCamera);
     } else {
       controls.update();
       hover.update();
