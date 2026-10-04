@@ -4,6 +4,8 @@ Exposes the command functions (`/building`, `/space`, `/object`) outside the bro
 
 Each call is stateless: it returns a validated spec and does not touch the browser's saved town.
 
+If the model reply is missing or fails validation, the server feeds the errors back and retries up to twice before returning 422; successful results include `attempts`.
+
 ## Configure the model
 
 ```env

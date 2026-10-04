@@ -13,6 +13,8 @@ const check = (label, cond) => {
 
 const replies = { building: EXAMPLE_SPEC, space: EXAMPLE_SPACE, object: EXAMPLE_OBJECT };
 let lastSystem = '';
+let badFirst = false;
+const seen = [];
 const llm = createServer((req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
@@ -20,7 +22,8 @@ const llm = createServer((req, res) => {
     const msgs = JSON.parse(body).messages;
     lastSystem = msgs[0].content;
     const kind = lastSystem.includes('TOOL create_building') ? 'building' : lastSystem.includes('TOOL create_space') ? 'space' : 'object';
-    const text = msg(kind);
+    const text = badFirst && msgs.length === 2 ? 'no json here' : msg(kind);
+    seen.push(msgs.length);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));
   });
@@ -45,6 +48,11 @@ r = await call('/api/functions/space', { request: 'server room', building });
 check('space returns validated spec', r.status === 200 && r.json.spec.parts.length === 6 && lastSystem.includes('DATA CORE'));
 r = await call('/api/functions/object', { request: 'coolant tank', building });
 check('object returns validated spec', r.status === 200 && r.json.spec.part.kind === 'tank');
+badFirst = true;
+seen.length = 0;
+r = await call('/api/functions/building', { request: 'a tower' });
+check('retries once with the errors and succeeds', r.status === 200 && r.json.attempts === 2 && seen.join() === '2,4');
+badFirst = false;
 r = await call('/api/functions/space', { request: 'x' });
 check('missing building is 400', r.status === 400);
 r = await call('/api/functions/nope', { request: 'x' });

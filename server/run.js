@@ -2,6 +2,8 @@ import { functionFor, FUNCTIONS, recordFrom } from '../src/ai/functions.js';
 import { getAdapter } from '../src/ai/providers/index.js';
 import { toRequestError } from '../src/ai/http.js';
 
+const MAX_RETRIES = 2;
+
 export function providerFromEnv(env = process.env) {
   return {
     protocol: env.ROBOT_TOWN_AI_PROTOCOL || 'openai',
@@ -43,20 +45,26 @@ export async function runFunction(id, input, { provider = providerFromEnv(), sig
     { role: 'user', content: request },
   ];
   let reply = '';
-  try {
-    await getAdapter(provider.protocol).streamChat(provider, provider.model, messages, {
-      signal,
-      onDelta: (t) => (reply += t),
-    });
-  } catch (err) {
-    const failure = toRequestError(err, provider);
-    return { ok: false, status: 502, errors: [failure.message] };
+  let failure = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    reply = '';
+    try {
+      await getAdapter(provider.protocol).streamChat(provider, provider.model, messages, {
+        signal,
+        onDelta: (t) => (reply += t),
+      });
+    } catch (err) {
+      return { ok: false, status: 502, errors: [toRequestError(err, provider).message] };
+    }
+
+    const raw = fn.extract(reply);
+    const check = raw ? fn.validate(raw, record) : null;
+    if (check?.ok) return { ok: true, status: 200, function: fn.id, spec: check.value, reply, attempts: attempt + 1 };
+    failure = { ok: false, status: 422, errors: check ? check.errors : ['NO JSON SPEC IN MODEL REPLY'], reply, attempts: attempt + 1 };
+    messages.push(
+      { role: 'assistant', content: reply },
+      { role: 'user', content: `Your spec was invalid: ${failure.errors.join('; ')}. Return a corrected spec in the same format.` }
+    );
   }
-
-  const raw = fn.extract(reply);
-  if (!raw) return { ok: false, status: 422, errors: ['NO JSON SPEC IN MODEL REPLY'], reply };
-  const check = fn.validate(raw, record);
-  if (!check.ok) return { ok: false, status: 422, errors: check.errors, reply };
-  return { ok: true, status: 200, function: fn.id, spec: check.value, reply };
+  return failure;
 }
-
